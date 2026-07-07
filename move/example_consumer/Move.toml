@@ -1,0 +1,13 @@
+[package]
+name = "example_consumer"
+edition = "2024"
+version = "0.0.1"
+
+# Pinned to the same revision as bs_oracle/Move.toml (see there for why).
+[dependencies]
+bs_oracle = { local = "../bs_oracle" }
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+MoveStdlib = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+
+[addresses]
+example_consumer = "0x0"

@@ -1,0 +1,18 @@
+[package]
+name = "bs_oracle"
+edition = "2024"
+version = "0.0.1"
+
+# Explicitly pinned rather than left to the implicit Sui >= 1.45 floor: an
+# unpinned build can silently resolve a different framework revision than CI or
+# another contributor's machine, which matters here because verify.move's
+# domain separator depends on type_name::original_id. Requires Sui CLI >= 1.74.1
+# locally (matches CI's SUI_VERSION) — this revision's framework source uses
+# language features an older toolchain's compiler can't resolve.
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+MoveStdlib = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+
+[addresses]
+bs_oracle = "0x0"

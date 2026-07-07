@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SUI_VERSION: testnet-1.74.1
+
+jobs:
+  quality:
+    name: Quality and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Install dependencies
+        run: pnpm -C ts install --frozen-lockfile
+
+      - name: Run local quality gate
+        run: scripts/check.sh
+
+  e2e:
+    name: Localnet e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Install dependencies
+        run: pnpm -C ts install --frozen-lockfile
+
+      - name: Start localnet
+        run: |
+          # `--force-regenesis --with-faucet` combined can fail to seed the faucet's
+          # gas coins on some runners (fails fast with "No address found with
+          # sufficient coins", but the RPC port never becomes reachable either).
+          # Genesis first, then start against it, is the documented workaround
+          # (`sui start --help`: "sui genesis -f --with-faucet generates a genesis
+          # config that can be used to start this process").
+          sui genesis -f --with-faucet
+          sui start --with-faucet > /tmp/sui-localnet.log 2>&1 &
+          echo "$!" > /tmp/sui-localnet.pid
+          for _ in $(seq 1 60); do
+            if curl -sSf \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"sui_getLatestCheckpointSequenceNumber","params":[]}' \
+              http://127.0.0.1:9000 >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/sui-localnet.log
+          exit 1
+
+      - name: Run localnet e2e
+        run: pnpm -C ts test:e2e
+
+      - name: Stop localnet
+        if: always()
+        run: |
+          if [ -f /tmp/sui-localnet.pid ]; then
+            kill "$(cat /tmp/sui-localnet.pid)" || true
+          fi

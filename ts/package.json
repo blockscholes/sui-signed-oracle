@@ -1,0 +1,42 @@
+{
+  "name": "bs-sui-signed-oracle",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Block Scholes -> Predict on Sui: off-chain secp256k1 signer + relayer + e2e for the signed-oracle MVP",
+  "scripts": {
+    "prepare": "cd .. && husky ts/.husky",
+    "format": "prettier --config .prettierrc.json --write \"src/**/*.ts\" \"eslint.config.js\" \".prettierrc.json\" \"package.json\" \"pnpm-workspace.yaml\" \"tsconfig.json\" \"../README.md\" \"../.github/**/*.yml\" \"../move/**/*.move\"",
+    "format:check": "prettier --config .prettierrc.json --check \"src/**/*.ts\" \"eslint.config.js\" \".prettierrc.json\" \"package.json\" \"pnpm-workspace.yaml\" \"tsconfig.json\" \"../README.md\" \"../.github/**/*.yml\" \"../move/**/*.move\"",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "typecheck": "tsc --noEmit",
+    "check": "../scripts/check.sh",
+    "precommit": "../scripts/pre-commit.sh",
+    "publish-packages": "tsx src/cli.ts publish",
+    "set-signer": "tsx src/cli.ts set-signer",
+    "relay": "tsx src/cli.ts relay",
+    "test": "vitest run",
+    "test:unit": "vitest run src/signer.test.ts",
+    "test:e2e": "vitest run src/e2e.test.ts"
+  },
+  "dependencies": {
+    "@mysten/bcs": "^1.6.0",
+    "@mysten/sui": "^1.36.0",
+    "@noble/hashes": "^1.7.1",
+    "@noble/secp256k1": "^2.2.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@mysten/prettier-plugin-move": "^0.3.5",
+    "@types/node": "^25.9.3",
+    "eslint": "^10.5.0",
+    "husky": "^9.1.7",
+    "prettier": "^3.8.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.61.1",
+    "vitest": "^3.0.5"
+  },
+  "packageManager": "pnpm@11.5.1+sha512.93f7b57422ea7068257235b4c16eb60762eb68e1dc23723199cc739043ea9be2c4143274a399d8c6defa2b1176226d9ca1c4b63482d6200c1a8fbaa78c1d1485"
+}

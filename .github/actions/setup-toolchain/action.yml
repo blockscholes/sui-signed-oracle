@@ -1,0 +1,24 @@
+name: Setup toolchain
+description: Set up Node.js, pnpm, and the Sui CLI (pinned to $SUI_VERSION)
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Set up pnpm
+      shell: bash
+      run: |
+        corepack enable
+        corepack prepare pnpm@11.5.1 --activate
+
+    - name: Install Sui CLI
+      shell: bash
+      run: |
+        # Pin the installer to an immutable commit so upstream cannot alter it without review.
+        curl -sSfL https://raw.githubusercontent.com/MystenLabs/suiup/dc008e2dcd6caa1df6e3302c24a2f9e881edfbb5/install.sh | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/suiup" install "sui@$SUI_VERSION" --yes
+        "$HOME/.local/bin/sui" --version

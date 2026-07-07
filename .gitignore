@@ -1,0 +1,30 @@
+# Move
+build/
+**/build/
+
+# Node / TS
+node_modules/
+dist/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# logs / local
+*.log
+.DS_Store
+
+# local-only internal notes (open questions, references) — never committed
+*.local.md
+
+# transient localnet deployment ids
+deployment.json
+
+# Move publish metadata — only ever holds ephemeral localnet package ids here
+**/Published.toml
+**/Pub.*.toml
+
+# read-only reference clone (do not vendor)
+reference/
