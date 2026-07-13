@@ -15,6 +15,7 @@ import {
   setupLocalnet,
   publishPackages,
   setSigner,
+  setPaused,
   Deployment,
   relay,
   BatchKind,
@@ -219,4 +220,22 @@ describe("Block Scholes -> Predict signed-oracle e2e (localnet)", () => {
     expect(r.success).toBe(false);
     expectAbort(r.error, "verify_and_create_value_batch", 9); // EEmptyBatch
   }, 60_000);
+
+  it("rejects every batch while paused, and resumes once unpaused", async () => {
+    // fresh sid so this case is independent of prior tests
+    const sid = 40n;
+    await setPaused(client, keypair, dep, true);
+    try {
+      const blocked = await relaySafe(await signValue(batchFields(secsAgo(5)), [valueUpdate(sid, SPOT)]), "value");
+      expect(blocked.success).toBe(false);
+      expectAbort(blocked.error, "verify_header", 11); // EPaused
+    } finally {
+      await setPaused(client, keypair, dep, false);
+    }
+
+    // a well-formed batch verifies again after unpausing
+    const resumed = await relaySafe(await signValue(batchFields(secsAgo(5)), [valueUpdate(sid, SPOT)]), "value");
+    expect(resumed.success).toBe(true);
+    expect(await readValue(client, dep, address, sid)).toBe(toFixed(SPOT));
+  }, 90_000);
 });

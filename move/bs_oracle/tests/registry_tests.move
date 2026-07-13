@@ -1,21 +1,22 @@
 // Copyright (c) Block Scholes.
 // SPDX-License-Identifier: Apache-2.0
 
-/// Unit tests for `set_signer` / `assert_pubkey_length` — the sole gate on
+/// Unit tests for `set_signer` / `assert_valid_pubkey` — the sole gate on
 /// which key the whole system trusts, so it's worth covering directly rather
 /// than only through the verify/consumer round-trip tests.
 #[test_only]
 module bs_oracle::registry_tests {
-    use bs_oracle::registry::{Self, SignerRegistry, AdminCap, SignerSet};
+    use bs_oracle::registry::{Self, SignerRegistry, AdminCap, SignerSet, PauseSet};
     use std::unit_test::assert_eq;
     use sui::{event, test_scenario::{Self as ts, return_shared}};
 
     const ADMIN: address = @0xAD;
 
+    // A compressed secp256k1 key: 0x02 prefix + 32 arbitrary bytes.
     fun valid_key(): vector<u8> {
-        let mut k = vector[];
+        let mut k = vector[0x02];
         let mut i = 0u64;
-        while (i < 33) {
+        while (i < 32) {
             k.push_back(i as u8);
             i = i + 1;
         };
@@ -53,6 +54,44 @@ module bs_oracle::registry_tests {
         let (mut reg, cap) = setup(&mut scenario);
 
         registry::set_signer(&mut reg, &cap, vector[1, 2, 3]);
+
+        ts::return_to_sender(&scenario, cap);
+        return_shared(reg);
+        scenario.end();
+    }
+
+    #[test, expected_failure(abort_code = registry::EBadPubkeyPrefix)]
+    fun set_signer_rejects_bad_prefix_key() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut reg, cap) = setup(&mut scenario);
+
+        // 33 bytes (right length) but 0x05 is not a valid compressed-key prefix.
+        let mut k = vector[0x05];
+        let mut i = 0u64;
+        while (i < 32) {
+            k.push_back(0u8);
+            i = i + 1;
+        };
+        registry::set_signer(&mut reg, &cap, k);
+
+        ts::return_to_sender(&scenario, cap);
+        return_shared(reg);
+        scenario.end();
+    }
+
+    #[test]
+    fun set_paused_toggles_and_emits_event() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut reg, cap) = setup(&mut scenario);
+
+        assert!(!registry::is_paused(&reg));
+
+        registry::set_paused(&mut reg, &cap, true);
+        assert!(registry::is_paused(&reg));
+        assert_eq!(event::events_by_type<PauseSet>().length(), 1);
+
+        registry::set_paused(&mut reg, &cap, false);
+        assert!(!registry::is_paused(&reg));
 
         ts::return_to_sender(&scenario, cap);
         return_shared(reg);

@@ -13,7 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { SuiClient } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
-import { Transaction } from "@mysten/sui/transactions";
+import { Transaction, type TransactionArgument } from "@mysten/sui/transactions";
 import { RPC_URL, FAUCET_URL, TEST_SIGNER_PRIV } from "./config.js";
 import { compressedPubkey } from "./signer.js";
 
@@ -284,25 +284,56 @@ export async function publishPackages(client: SuiClient, keypair: Ed25519Keypair
   };
 }
 
-export async function setSigner(client: SuiClient, keypair: Ed25519Keypair, dep: Deployment): Promise<void> {
+/// Shared request/response flow for AdminCap-gated registry calls: build the PTB via
+/// `buildArgs`, submit, check status, and wait for finality.
+async function execAdminCall(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  target: string,
+  buildArgs: (tx: Transaction) => TransactionArgument[],
+  errLabel: string,
+): Promise<void> {
   const tx = new Transaction();
-  tx.moveCall({
-    target: `${dep.bsPackageId}::registry::set_signer`,
-    arguments: [
-      tx.object(dep.registryId),
-      tx.object(dep.adminCapId),
-      tx.pure.vector("u8", Array.from(compressedPubkey(TEST_SIGNER_PRIV))),
-    ],
-  });
+  tx.moveCall({ target, arguments: buildArgs(tx) });
   const res = await client.signAndExecuteTransaction({
     signer: keypair,
     transaction: tx,
     options: { showEffects: true },
   });
   if (res.effects?.status.status !== "success") {
-    throw new Error(`set_signer failed: ${JSON.stringify(res.effects?.status)}`);
+    throw new Error(`${errLabel} failed: ${JSON.stringify(res.effects?.status)}`);
   }
   await client.waitForTransaction({ digest: res.digest });
+}
+
+export async function setSigner(client: SuiClient, keypair: Ed25519Keypair, dep: Deployment): Promise<void> {
+  return execAdminCall(
+    client,
+    keypair,
+    `${dep.bsPackageId}::registry::set_signer`,
+    (tx) => [
+      tx.object(dep.registryId),
+      tx.object(dep.adminCapId),
+      tx.pure.vector("u8", Array.from(compressedPubkey(TEST_SIGNER_PRIV))),
+    ],
+    "set_signer",
+  );
+}
+
+/// Toggle the registry's emergency pause flag (AdminCap-gated).
+export async function setPaused(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  dep: Deployment,
+  paused: boolean,
+): Promise<void> {
+  return execAdminCall(
+    client,
+    keypair,
+    `${dep.bsPackageId}::registry::set_paused`,
+    (tx) => [tx.object(dep.registryId), tx.object(dep.adminCapId), tx.pure.bool(paused)],
+    `set_paused(${paused})`,
+  );
 }
 
 // === Relayer ===
