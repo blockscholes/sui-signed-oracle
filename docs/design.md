@@ -426,6 +426,15 @@ by the verifier and mutated only via the `AdminCap`.
 | Field | What it is | Admin setter |
 | --- | --- | --- |
 | `signer_pubkey` | the single authorized 33-byte compressed key | `set_signer` (set / rotate) |
+| `paused` | emergency stop; while `true` the verifier rejects every batch (both categories) | `set_paused` |
+
+**Key validation.** `set_signer` rejects anything that isn't a well-formed compressed secp256k1 key
+(33 bytes with a `0x02`/`0x03` prefix), so an admin typo cannot silently brick verification with a
+key `ecrecover` can never match.
+
+**Emergency pause.** `set_paused(true)` makes `verify_header` abort with `EPaused` on every batch,
+halting a compromised signer without a package upgrade (impossible here — the `UpgradeCap` is burned).
+`set_paused(false)` resumes. Reads are unaffected.
 
 **Deployment binding.** There's no `registry_id` field to assert — deployment binding instead comes
 from what's hashed: the signer and verifier both prepend the target package's own address before

@@ -17,8 +17,17 @@ runs:
     - name: Install Sui CLI
       shell: bash
       run: |
-        # Pin the installer to an immutable commit so upstream cannot alter it without review.
-        curl -sSfL https://raw.githubusercontent.com/MystenLabs/suiup/dc008e2dcd6caa1df6e3302c24a2f9e881edfbb5/install.sh | sh
+        # Pinned release tarball instead of upstream's install.sh, which scrapes
+        # "latest" from tag_name via a sed pattern that breaks on GitHub's
+        # compact (no-space) JSON and yields a garbage download URL.
+        SUIUP_VERSION="v0.0.14"
+        SUIUP_SHA256="c0b9fea95d52c4c5855478c3ee56e58e446614f32300dbd41fcc637a2e09878a"
+        mkdir -p "$HOME/.local/bin"
+        curl -sSfL "https://github.com/MystenLabs/suiup/releases/download/${SUIUP_VERSION}/suiup-Linux-musl-x86_64.tar.gz" \
+          -o /tmp/suiup.tar.gz
+        echo "${SUIUP_SHA256}  /tmp/suiup.tar.gz" | sha256sum -c -
+        tar -xzf /tmp/suiup.tar.gz -C "$HOME/.local/bin" suiup
+        chmod +x "$HOME/.local/bin/suiup"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         "$HOME/.local/bin/suiup" install "sui@$SUI_VERSION" --yes
         "$HOME/.local/bin/sui" --version

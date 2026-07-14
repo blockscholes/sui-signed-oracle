@@ -6,8 +6,11 @@
 /// the live-signed localnet e2e in `ts/src/e2e.test.ts`.
 #[test_only]
 module bs_oracle::verify_tests {
-    use bs_oracle::verify;
+    use bs_oracle::{registry::{Self, SignerRegistry, AdminCap}, verify};
     use std::unit_test::assert_eq;
+    use sui::{clock::{Self, Clock}, test_scenario::{Self as ts, return_shared}};
+
+    const ADMIN: address = @0xAD;
 
     // A full-width hash-like sid — exceeds u32::MAX and u64::MAX, so it proves the
     // accessor/test-ctor path preserves the whole `u256` rather than narrowing it.
@@ -69,5 +72,26 @@ module bs_oracle::verify_tests {
         assert!(!m_neg);
 
         batch.destroy_svi_batch();
+    }
+
+    // `verify_header` checks pause before signature/message parsing, so this exercises
+    // the gate directly with a throwaway message rather than needing a real signature.
+    #[test, expected_failure(abort_code = verify::EPaused)]
+    fun verify_and_create_value_batch_rejects_when_paused() {
+        let mut scenario = ts::begin(ADMIN);
+        registry::init_for_testing(scenario.ctx());
+        scenario.next_tx(ADMIN);
+        let mut reg = scenario.take_shared<SignerRegistry>();
+        let cap = scenario.take_from_sender<AdminCap>();
+        let clk = clock::create_for_testing(scenario.ctx());
+
+        registry::set_paused(&mut reg, &cap, true);
+        let batch = verify::verify_and_create_value_batch(&reg, &clk, vector[]);
+        batch.destroy_value_batch();
+
+        ts::return_to_sender(&scenario, cap);
+        return_shared(reg);
+        clk.destroy_for_testing();
+        scenario.end();
     }
 }

@@ -34,6 +34,7 @@ module bs_oracle::verify {
     const ETrailingPayloadData: u64 = 8;
     const EEmptyBatch: u64 = 9;
     const EBadBatchKind: u64 = 10;
+    const EPaused: u64 = 11;
 
     /// Marker type used only to resolve this package's own runtime address
     /// (`type_name::original_id<PackageMarker>()`) — kept separate from the data
@@ -105,6 +106,7 @@ module bs_oracle::verify {
     /// Split the signature, check the shared envelope (batch kind, address-prefixed
     /// signature, freshness), and return the decoder at `updates`.
     fun verify_header(reg: &SignerRegistry, clock: &Clock, message: vector<u8>, expected_kind: u8): (BCS, u64) {
+        assert!(!reg.is_paused(), EPaused);
         assert!(message.length() > SECP256K1_SIG_LEN, EBadMessageLength);
 
         let mut envelope = bcs::new(message);
