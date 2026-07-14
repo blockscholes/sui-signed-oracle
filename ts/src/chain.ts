@@ -18,6 +18,10 @@ import { RPC_URL, FAUCET_URL, TEST_SIGNER_PRIV } from "./config.js";
 import { compressedPubkey } from "./signer.js";
 
 const CLOCK_ID = "0x6";
+/// Bound on AdminCap-gated calls (setSigner/setPaused) so a hung RPC surfaces as an
+/// error instead of blocking indefinitely — setPaused is the emergency-stop lever, so
+/// this matters most exactly when an operator is relying on it during an incident.
+const ADMIN_CALL_TIMEOUT_MS = 30_000;
 /// Gas budget for a package publish; the active address must hold at least this.
 const PUBLISH_GAS_BUDGET = 2_000_000_000n;
 /// Named environment Move.lock pins framework dependencies for (see both Move.toml
@@ -299,11 +303,12 @@ async function execAdminCall(
     signer: keypair,
     transaction: tx,
     options: { showEffects: true },
+    signal: AbortSignal.timeout(ADMIN_CALL_TIMEOUT_MS),
   });
   if (res.effects?.status.status !== "success") {
     throw new Error(`${errLabel} failed: ${JSON.stringify(res.effects?.status)}`);
   }
-  await client.waitForTransaction({ digest: res.digest });
+  await client.waitForTransaction({ digest: res.digest, timeout: ADMIN_CALL_TIMEOUT_MS });
 }
 
 export async function setSigner(client: SuiClient, keypair: Ed25519Keypair, dep: Deployment): Promise<void> {

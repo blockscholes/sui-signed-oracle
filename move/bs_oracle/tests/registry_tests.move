@@ -14,7 +14,13 @@ module bs_oracle::registry_tests {
 
     // A compressed secp256k1 key: 0x02 prefix + 32 arbitrary bytes.
     fun valid_key(): vector<u8> {
-        let mut k = vector[0x02];
+        valid_key_with_prefix(0x02)
+    }
+
+    // Same shape as `valid_key`, but with a caller-chosen prefix — lets tests cover
+    // both accepted compressed-key prefixes (0x02 even Y, 0x03 odd Y).
+    fun valid_key_with_prefix(prefix: u8): vector<u8> {
+        let mut k = vector[prefix];
         let mut i = 0u64;
         while (i < 32) {
             k.push_back(i as u8);
@@ -42,6 +48,21 @@ module bs_oracle::registry_tests {
         assert_eq!(registry::signer_pubkey(&reg), key);
         let events = event::events_by_type<SignerSet>();
         assert_eq!(events.length(), 1);
+
+        ts::return_to_sender(&scenario, cap);
+        return_shared(reg);
+        scenario.end();
+    }
+
+    #[test]
+    fun set_signer_accepts_odd_prefix_key() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut reg, cap) = setup(&mut scenario);
+
+        let key = valid_key_with_prefix(0x03);
+        registry::set_signer(&mut reg, &cap, key);
+
+        assert_eq!(registry::signer_pubkey(&reg), key);
 
         ts::return_to_sender(&scenario, cap);
         return_shared(reg);

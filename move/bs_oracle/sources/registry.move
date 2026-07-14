@@ -62,9 +62,11 @@ module bs_oracle::registry {
 
     // === Admin (AdminCap-gated) ===
 
-    /// Set (or rotate) the single authorized signing key. Aborts unless the key is a
-    /// well-formed compressed secp256k1 key (33 bytes with a 0x02/0x03 prefix), so an
-    /// admin typo cannot silently brick verification with an unrecoverable key.
+    /// Set (or rotate) the single authorized signing key. Aborts unless the key has
+    /// the shape of a compressed secp256k1 key (33 bytes, 0x02/0x03 prefix) — a
+    /// format check only, not proof the bytes are a valid curve point. There's no
+    /// Move-level primitive to fully validate the point, so a wrong-but-well-formed
+    /// key still passes here; it simply can never recover a real signature.
     public fun set_signer(reg: &mut SignerRegistry, _admin: &AdminCap, public_key: vector<u8>) {
         assert_valid_pubkey(&public_key);
         reg.signer_pubkey = public_key;
