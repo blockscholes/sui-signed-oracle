@@ -20,7 +20,7 @@ import {
   relay,
   BatchKind,
   readValue,
-  readSviAMagnitude,
+  readSviParams,
   readLastTimestamp,
 } from "./chain.js";
 import { signPayloadSecp256k1, frameMessage } from "./signer.js";
@@ -34,34 +34,35 @@ import {
   ValueUpdate,
   SviUpdate,
 } from "./payloads.js";
-import { SPOT_SID, SVI_SID, TEST_SIGNER_PRIV, TEST_SIGNER_PRIV_2, SPOT, FORWARD, SVI } from "./config.js";
+import { SPOT_SID, TEST_SIGNER_PRIV, TEST_SIGNER_PRIV_2, SPOT, FORWARD, SVI } from "./config.js";
 
 let client: SuiClient;
 let keypair: Ed25519Keypair;
 let address: string;
 let dep: Deployment;
 
-// Every update carries its own `timestamp`: it is both the future-date anchor
-// (verifier) and that sid's replay key (consumer). Each case derives its timestamps
-// from `nowMs()` at send time, a few seconds in the past so they are never
-// future-dated; nothing is frozen across the suite, so per-sid ordering stays tied
-// to send time.
+// Every update carries its own `timestamp`, which is that sid's replay key in the
+// consumer; the batch additionally carries the time it was sent. Each case derives its
+// timestamps from `nowMs()` at send time, a few seconds in the past; nothing is frozen
+// across the suite, so per-sid ordering stays tied to send time.
 const nowMs = () => BigInt(Date.now());
 const secsAgo = (s: number) => nowMs() - BigInt(s) * 1_000n;
 
 interface Overrides {
   priv?: string;
   packageId?: string;
+  /// Batch send time; defaults to now, which is what a live publisher sends.
+  batchTimestamp?: bigint;
 }
 
 async function signValue(updates: ValueUpdate[], over: Overrides = {}): Promise<Uint8Array> {
-  const payload = buildValueBatchPayload(updates);
+  const payload = buildValueBatchPayload(over.batchTimestamp ?? nowMs(), updates);
   const signedBytes = signedBytesFor(over.packageId ?? dep.bsPackageId, payload);
   return frameMessage(await signPayloadSecp256k1(signedBytes, over.priv ?? TEST_SIGNER_PRIV), payload);
 }
 
 async function signSvi(updates: SviUpdate[], over: Overrides = {}): Promise<Uint8Array> {
-  const payload = buildSviBatchPayload(updates);
+  const payload = buildSviBatchPayload(over.batchTimestamp ?? nowMs(), updates);
   const signedBytes = signedBytesFor(over.packageId ?? dep.bsPackageId, payload);
   return frameMessage(await signPayloadSecp256k1(signedBytes, over.priv ?? TEST_SIGNER_PRIV), payload);
 }
@@ -139,12 +140,35 @@ describe("Block Scholes -> Predict signed-oracle e2e (localnet)", () => {
     expect(await readLastTimestamp(client, dep, address, sid)).toBe(ts);
   }, 90_000);
 
-  it("verifies and ingests an SVI batch", async () => {
+  it("round-trips every widened SVI field above u64::MAX", async () => {
+    const u64Max = (1n << 64n) - 1n;
     const ts = secsAgo(5);
-    const r = await relaySafe(await signSvi([sviUpdate(SVI_SID, ts, SVI)]), "svi");
+    const sid = 51n;
+    const update: SviUpdate = {
+      sid,
+      timestamp: ts,
+      svi_a_magnitude: u64Max + 1n,
+      svi_a_is_negative: true,
+      svi_b: u64Max + 2n,
+      svi_sigma: u64Max + 3n,
+      svi_rho_magnitude: u64Max + 4n,
+      svi_rho_is_negative: false,
+      svi_m_magnitude: u64Max + 5n,
+      svi_m_is_negative: true,
+    };
+    const r = await relaySafe(await signSvi([update]), "svi");
     expect(r.success).toBe(true);
-    expect(await readSviAMagnitude(client, dep, address, SVI_SID)).toBe(toFixed(SVI.a));
-    expect(await readLastTimestamp(client, dep, address, SVI_SID)).toBe(ts);
+    expect(await readSviParams(client, dep, address, sid)).toEqual({
+      svi_a_magnitude: update.svi_a_magnitude,
+      svi_a_is_negative: update.svi_a_is_negative,
+      svi_b: update.svi_b,
+      svi_sigma: update.svi_sigma,
+      svi_rho_magnitude: update.svi_rho_magnitude,
+      svi_rho_is_negative: update.svi_rho_is_negative,
+      svi_m_magnitude: update.svi_m_magnitude,
+      svi_m_is_negative: update.svi_m_is_negative,
+    });
+    expect(await readLastTimestamp(client, dep, address, sid)).toBe(ts);
   }, 60_000);
 
   it("verifies a multi-update value batch, each series carrying its own timestamp", async () => {
@@ -204,29 +228,39 @@ describe("Block Scholes -> Predict signed-oracle e2e (localnet)", () => {
     expectAbort(r.error, "verify_header", 6); // EBadBatchKind
   }, 60_000);
 
-  it("rejects a future-dated timestamp", async () => {
-    const r = await relaySafe(await valueMessage(nowMs() + 120_000n), "value");
-    expect(r.success).toBe(false);
-    expectAbort(r.error, "peel_timestamp", 3); // EFutureTimestamp
+  it("round-trips a u128 value while accepting an update timestamp ahead of the chain clock", async () => {
+    // `verify` does not interpret the timestamp: precision is the client's choice,
+    // so a value that looks future-dated in ms may just be another unit. Per-update
+    // bounds belong to the feed-aware consumer policy.
+    const sid = 60n;
+    const ts = nowMs() + 120_000n;
+    const v = (1n << 64n) + 1n;
+    const r = await relaySafe(await signValue([{ sid, timestamp: ts, v }]), "value");
+    expect(r.success).toBe(true);
+    expect(await readLastTimestamp(client, dep, address, sid)).toBe(ts);
+    expect(await readValue(client, dep, address, sid)).toBe(v);
   }, 60_000);
 
-  it("rejects a batch when only the second update is future-dated", async () => {
-    // The guard is per-update now, so it has to catch a bad entry anywhere in the
-    // vector — not just the first one it decodes.
-    const updates = [valueUpdate(60n, secsAgo(5), SPOT), valueUpdate(61n, nowMs() + 120_000n, FORWARD)];
-    const r = await relaySafe(await signValue(updates), "value");
+  it("rejects a batch timestamp too far ahead of the chain clock", async () => {
+    const r = await relaySafe(await valueMessage(secsAgo(5), { batchTimestamp: nowMs() + 120_000n }), "value");
     expect(r.success).toBe(false);
-    expectAbort(r.error, "peel_timestamp", 3); // EFutureTimestamp
-    // the batch aborted in `verify`, so even the well-formed first update is
-    // unapplied — reading an absent sid aborts the devInspect call
-    await expect(readValue(client, dep, address, 60n)).rejects.toThrow(/no return value/);
+    expectAbort(r.error, "validate_batch_timestamp", 3);
+  }, 60_000);
+
+  it("rejects a stale batch timestamp", async () => {
+    const r = await relaySafe(
+      await signSvi([sviUpdate(62n, secsAgo(5), SVI)], { batchTimestamp: nowMs() - 120_000n }),
+      "svi",
+    );
+    expect(r.success).toBe(false);
+    expectAbort(r.error, "validate_batch_timestamp", 2);
   }, 60_000);
 
   it("rejects a message that's exactly the signature length (no payload)", async () => {
     // A valid signature over some payload, framed with no payload at all: the
     // message is exactly 65 bytes, so `verify_header` rejects it on length alone,
     // before signature recovery is even attempted.
-    const payload = buildValueBatchPayload([valueUpdate(SPOT_SID, secsAgo(5), SPOT)]);
+    const payload = buildValueBatchPayload(nowMs(), [valueUpdate(SPOT_SID, secsAgo(5), SPOT)]);
     const signedBytes = signedBytesFor(dep.bsPackageId, payload);
     const sig = await signPayloadSecp256k1(signedBytes, TEST_SIGNER_PRIV);
     const r = await relaySafe(frameMessage(sig, new Uint8Array(0)), "value");
@@ -238,7 +272,7 @@ describe("Block Scholes -> Predict signed-oracle e2e (localnet)", () => {
     // Append a byte to the payload *before* signing, so the signature covers the
     // extended bytes and stays valid — the decoder consumes exactly the batch it
     // knows about and leaves the extra byte as an unconsumed remainder.
-    const payload = buildValueBatchPayload([valueUpdate(SPOT_SID, secsAgo(5), SPOT)]);
+    const payload = buildValueBatchPayload(nowMs(), [valueUpdate(SPOT_SID, secsAgo(5), SPOT)]);
     const extended = new Uint8Array(payload.length + 1);
     extended.set(payload);
     extended[payload.length] = 0xff;

@@ -8,7 +8,7 @@
 module bs_oracle::verify_tests {
     use bs_oracle::{registry::{Self, SignerRegistry, AdminCap}, verify};
     use std::unit_test::assert_eq;
-    use sui::{clock::{Self, Clock}, test_scenario::{Self as ts, return_shared}};
+    use sui::test_scenario::{Self as ts, return_shared};
 
     const ADMIN: address = @0xAD;
 
@@ -18,6 +18,10 @@ module bs_oracle::verify_tests {
     const SID_B: u256 = 11;
     const SVI_SID: u256 = 12;
 
+    // Distinct from every per-update timestamp below, so the batch accessor can't pass
+    // by accidentally reading an update's.
+    const BATCH_TS: u64 = 9_000_000;
+
     #[test]
     fun value_batch_accessors_round_trip() {
         // Distinct timestamps, to prove each update carries its own.
@@ -25,7 +29,10 @@ module bs_oracle::verify_tests {
             verify::new_value_update_for_testing(SID_A, 1_000_000, 65_000_000_000_000),
             verify::new_value_update_for_testing(SID_B, 1_500_000, 65_250_000_000_000),
         ];
-        let batch = verify::new_value_batch_for_testing(updates);
+        let batch = verify::new_value_batch_for_testing(BATCH_TS, updates);
+
+        // The batch's own send time, read before the batch is consumed.
+        assert_eq!(batch.value_batch_timestamp(), BATCH_TS);
 
         // The call the consumer makes.
         let out = batch.into_value_updates();
@@ -68,7 +75,9 @@ module bs_oracle::verify_tests {
                 true,
             ),
         ];
-        let batch = verify::new_svi_batch_for_testing(updates);
+        let batch = verify::new_svi_batch_for_testing(BATCH_TS, updates);
+
+        assert_eq!(batch.svi_batch_timestamp(), BATCH_TS);
 
         let out = batch.into_svi_updates();
         assert_eq!(out.length(), 2);
@@ -106,15 +115,13 @@ module bs_oracle::verify_tests {
         scenario.next_tx(ADMIN);
         let mut reg = scenario.take_shared<SignerRegistry>();
         let cap = scenario.take_from_sender<AdminCap>();
-        let clk = clock::create_for_testing(scenario.ctx());
 
         registry::set_paused(&mut reg, &cap, true);
-        let batch = verify::verify_and_create_value_batch(&reg, &clk, vector[]);
+        let batch = verify::verify_and_create_value_batch(&reg, vector[]);
         batch.into_value_updates();
 
         ts::return_to_sender(&scenario, cap);
         return_shared(reg);
-        clk.destroy_for_testing();
         scenario.end();
     }
 }
