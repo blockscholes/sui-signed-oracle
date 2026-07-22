@@ -2,8 +2,12 @@
 // helpers. Field order and types in the schema MUST match the Move decoder in
 // `bs_oracle::verify` byte-for-byte (the signature covers these bytes; on-chain
 // `ecrecover` keccak-hashes them). A batch is homogeneous by category: a value or
-// SVI batch, sharing one envelope. Each update carries its own `timestamp`, so a
-// series whose data hasn't advanced can be re-sent pinned to its original time.
+// SVI batch, sharing one envelope.
+//
+// Two timestamps, answering different questions: the envelope's is when this batch
+// was sent (it advances every flush, so the feed is visibly alive even when nothing
+// moved), while each update's own is when that series' data is "as of" — so a series
+// whose data hasn't advanced is re-sent pinned to its original time.
 
 import { bcs, type InferBcsInput } from "@mysten/bcs";
 
@@ -17,11 +21,12 @@ export const BATCH_SVI = 1;
 // === BCS schema ===
 
 /// A single value `v` for series `sid` (today: spot or forward price — the `sid`
-/// says which), as of `timestamp`. @1e9 fixed point.
+/// says which), as of `timestamp`. `v` is a fixed-point integer at whatever scale
+/// the signer and consumer agreed off-chain; the contract stores it verbatim.
 export const ValueUpdate = bcs.struct("ValueUpdate", {
   sid: bcs.u256(),
   timestamp: bcs.u64(), // this series' market-data time
-  v: bcs.u64(),
+  v: bcs.u128(),
 });
 export type ValueUpdate = InferBcsInput<typeof ValueUpdate>;
 
@@ -30,21 +35,23 @@ export type ValueUpdate = InferBcsInput<typeof ValueUpdate>;
 export const SviUpdate = bcs.struct("SviUpdate", {
   sid: bcs.u256(),
   timestamp: bcs.u64(), // this series' market-data time
-  svi_a_magnitude: bcs.u64(),
+  svi_a_magnitude: bcs.u128(),
   svi_a_is_negative: bcs.bool(),
-  svi_b: bcs.u64(),
-  svi_sigma: bcs.u64(),
-  svi_rho_magnitude: bcs.u64(),
+  svi_b: bcs.u128(),
+  svi_sigma: bcs.u128(),
+  svi_rho_magnitude: bcs.u128(),
   svi_rho_is_negative: bcs.bool(),
-  svi_m_magnitude: bcs.u64(),
+  svi_m_magnitude: bcs.u128(),
   svi_m_is_negative: bcs.bool(),
 });
 export type SviUpdate = InferBcsInput<typeof SviUpdate>;
 
-/// Shared envelope (in field order, so spreading it keeps the byte layout). The
-/// timestamp lives on each update, not here — see `ValueUpdate`/`SviUpdate`.
+/// Shared envelope (in field order, so spreading it keeps the byte layout). Its
+/// `timestamp` is the batch's send time; each update additionally carries the time
+/// its own series is "as of" — see `ValueUpdate`/`SviUpdate`.
 const envelope = {
   batch_kind: bcs.u8(),
+  timestamp: bcs.u64(),
 };
 
 const ValueBatchPayload = bcs.struct("ValueBatchPayload", {
@@ -91,7 +98,9 @@ export function signedBytesFor(packageId: string, payload: Uint8Array): Uint8Arr
 
 // === Fixed-point ===
 
-/// Fixed-point scale shared with the contracts (1e9).
+/// Default fixed-point scale used by this reference client's helpers. The
+/// contract fixes no scale — it is an off-chain agreement between the signer
+/// and the consumer, so a client signing at another scale bypasses `toFixed`.
 export const SCALE = 1_000_000_000n;
 
 export function toFixed(x: number): bigint {
@@ -109,15 +118,21 @@ function signedFixed(x: number): { magnitude: bigint; isNegative: boolean } {
 
 // === Builders ===
 
-export function buildValueBatchPayload(updates: ValueUpdate[]): Uint8Array {
-  return ValueBatchPayload.serialize({ batch_kind: BATCH_VALUE, updates }).toBytes();
+/// `timestamp` is when this batch was sent, not when any one series last moved.
+export function buildValueBatchPayload(timestamp: bigint, updates: ValueUpdate[]): Uint8Array {
+  return ValueBatchPayload.serialize({ batch_kind: BATCH_VALUE, timestamp, updates }).toBytes();
 }
 
-export function buildSviBatchPayload(updates: SviUpdate[]): Uint8Array {
-  return SviBatchPayload.serialize({ batch_kind: BATCH_SVI, updates }).toBytes();
+/// `timestamp` is when this batch was sent, not when any one series last moved.
+export function buildSviBatchPayload(timestamp: bigint, updates: SviUpdate[]): Uint8Array {
+  return SviBatchPayload.serialize({ batch_kind: BATCH_SVI, timestamp, updates }).toBytes();
 }
 
 /// A value update for series `sid` (today: spot or forward price), as of `timestamp`.
+/// `value` is a JS `number`, so it is bounded by `toFixed`'s safe-integer check —
+/// fine at this reference client's 1e9 scale, but a client signing at a scale wide
+/// enough to need the full `u128` range should construct the `ValueUpdate` object
+/// directly with `v` as a `bigint`/decimal string instead of going through this helper.
 export function valueUpdate(sid: bigint, timestamp: bigint, value: number): ValueUpdate {
   return { sid, timestamp, v: toFixed(value) };
 }
@@ -131,7 +146,9 @@ export interface SviParams {
 }
 
 /// An SVI update for series `sid`, as of `timestamp`. `a`/`rho`/`m` are encoded as
-/// magnitude + sign.
+/// magnitude + sign. Same `number`/safe-integer caveat as `valueUpdate` — construct
+/// the `SviUpdate` object directly for any field that needs the full `u128` range,
+/// including `svi_b` and `svi_sigma`.
 export function sviUpdate(sid: bigint, timestamp: bigint, p: SviParams): SviUpdate {
   const a = signedFixed(p.a);
   const rho = signedFixed(p.rho);

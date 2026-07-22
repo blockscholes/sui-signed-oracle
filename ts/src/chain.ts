@@ -368,7 +368,7 @@ export function buildRelayTx(dep: Deployment, message: Uint8Array, kind: BatchKi
   const tx = new Transaction();
   const batch = tx.moveCall({
     target: `${dep.bsPackageId}::verify::${VERIFY_FN[kind]}`,
-    arguments: [tx.object(dep.registryId), tx.object(CLOCK_ID), tx.pure.vector("u8", Array.from(message))],
+    arguments: [tx.object(dep.registryId), tx.pure.vector("u8", Array.from(message))],
   })[0];
   if (batch === undefined) {
     throw new Error(`${VERIFY_FN[kind]} did not return a batch transaction argument`);
@@ -448,7 +448,72 @@ export function readSviAMagnitude(client: SuiClient, dep: Deployment, sender: st
   return readScalar(client, dep, sender, "svi_params", sid);
 }
 
+export interface SviReadback {
+  svi_a_magnitude: bigint;
+  svi_a_is_negative: boolean;
+  svi_b: bigint;
+  svi_sigma: bigint;
+  svi_rho_magnitude: bigint;
+  svi_rho_is_negative: boolean;
+  svi_m_magnitude: bigint;
+  svi_m_is_negative: boolean;
+}
+
+/// Read every stored SVI field for a `sid` via devInspect.
+export async function readSviParams(
+  client: SuiClient,
+  dep: Deployment,
+  sender: string,
+  sid: bigint,
+): Promise<SviReadback> {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${dep.examplePackageId}::oracle::svi_params`,
+    arguments: [tx.object(dep.oracleId), tx.pure.u256(sid)],
+  });
+  const res = await client.devInspectTransactionBlock({ sender, transactionBlock: tx });
+  const values = res.results?.[0]?.returnValues;
+  if (values?.length !== 8) {
+    throw new Error(`expected 8 return values for svi_params: ${JSON.stringify(res.error ?? res)}`);
+  }
+  const scalar = (index: number): bigint => {
+    const value = values[index];
+    if (!value) throw new Error(`missing svi_params return value at index ${index}`);
+    return leToBigInt(value[0]);
+  };
+  const bool = (index: number): boolean => {
+    const value = scalar(index);
+    if (value > 1n) throw new Error(`invalid bool return value at svi_params index ${index}: ${value}`);
+    return value === 1n;
+  };
+  return {
+    svi_a_magnitude: scalar(0),
+    svi_a_is_negative: bool(1),
+    svi_b: scalar(2),
+    svi_sigma: scalar(3),
+    svi_rho_magnitude: scalar(4),
+    svi_rho_is_negative: bool(5),
+    svi_m_magnitude: scalar(6),
+    svi_m_is_negative: bool(7),
+  };
+}
+
 /// Read the latest accepted timestamp for a `sid` via devInspect.
 export function readLastTimestamp(client: SuiClient, dep: Deployment, sender: string, sid: bigint): Promise<bigint> {
   return readScalar(client, dep, sender, "last_timestamp", sid);
+}
+
+/// Read the most recent batch timestamp via devInspect. Unlike the reads above this
+/// takes no `sid`: it is the feed-liveness signal, and advances on every ingested
+/// batch even when every update in it was skipped.
+export async function readLastBatchTimestamp(client: SuiClient, dep: Deployment, sender: string): Promise<bigint> {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${dep.examplePackageId}::oracle::last_batch_timestamp`,
+    arguments: [tx.object(dep.oracleId)],
+  });
+  const res = await client.devInspectTransactionBlock({ sender, transactionBlock: tx });
+  const rv = res.results?.[0]?.returnValues?.[0];
+  if (!rv) throw new Error(`no return value for last_batch_timestamp: ${JSON.stringify(res.error ?? res)}`);
+  return leToBigInt(rv[0]);
 }

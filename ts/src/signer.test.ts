@@ -7,14 +7,15 @@ import { describe, it, expect } from "vitest";
 import * as secp from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { signPayloadSecp256k1, frameMessage, compressedPubkey, evmAddress } from "./signer.js";
-import { buildValueBatchPayload, valueUpdate, hexToBytes, signedBytesFor } from "./payloads.js";
+import { buildValueBatchPayload, valueUpdate, hexToBytes, signedBytesFor, ValueUpdate } from "./payloads.js";
 import { TEST_SIGNER_PRIV, SPOT_SID } from "./config.js";
 
+const BATCH_TS = 9_000_000n;
 const updates = [valueUpdate(SPOT_SID, 1_000_000n, 65000)];
 
 describe("secp256k1 signer", () => {
   it("produces an {r,s,v} signature with EVM recovery id (27 or 28)", async () => {
-    const payload = buildValueBatchPayload(updates);
+    const payload = buildValueBatchPayload(BATCH_TS, updates);
     const sig = await signPayloadSecp256k1(payload, TEST_SIGNER_PRIV);
     expect(sig.r).toMatch(/^0x[0-9a-f]{64}$/);
     expect(sig.s).toMatch(/^0x[0-9a-f]{64}$/);
@@ -22,7 +23,7 @@ describe("secp256k1 signer", () => {
   });
 
   it("recovers the registered 33-byte compressed pubkey from (sig, keccak(payload))", async () => {
-    const payload = buildValueBatchPayload(updates);
+    const payload = buildValueBatchPayload(BATCH_TS, updates);
     const sig = await signPayloadSecp256k1(payload, TEST_SIGNER_PRIV);
     const digest = keccak_256(payload);
     const compact = Uint8Array.from([...hexToBytes(sig.r), ...hexToBytes(sig.s)]);
@@ -34,7 +35,7 @@ describe("secp256k1 signer", () => {
   });
 
   it("frames the wire message as r||s||v (v normalized to {0,1}) || payload", async () => {
-    const payload = buildValueBatchPayload(updates);
+    const payload = buildValueBatchPayload(BATCH_TS, updates);
     const sig = await signPayloadSecp256k1(payload, TEST_SIGNER_PRIV);
     const msg = frameMessage(sig, payload);
     expect(msg.length).toBe(65 + payload.length);
@@ -51,6 +52,14 @@ describe("secp256k1 signer", () => {
 });
 
 describe("payload encoding validation", () => {
+  it("round-trips a value above u64::MAX through the u128 BCS field", () => {
+    // All other fixtures fit in u64; this proves the widened field doesn't truncate.
+    const v = (1n << 64n) + 1n;
+    const update: ValueUpdate = { sid: SPOT_SID, timestamp: 1_000_000n, v };
+    const bytes = ValueUpdate.serialize(update).toBytes();
+    expect(ValueUpdate.parse(bytes).v).toBe(v.toString());
+  });
+
   it("rejects non-hex characters", () => {
     expect(() => hexToBytes("0x" + "zz".repeat(32))).toThrow(/non-hex/);
   });
@@ -60,7 +69,7 @@ describe("payload encoding validation", () => {
   });
 
   it("rejects a packageId that is not 32 bytes", () => {
-    const payload = buildValueBatchPayload(updates);
+    const payload = buildValueBatchPayload(BATCH_TS, updates);
     expect(() => signedBytesFor("0xdead", payload)).toThrow(/expected 32 bytes/);
   });
 });

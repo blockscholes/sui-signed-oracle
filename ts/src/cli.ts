@@ -15,6 +15,7 @@ import {
   readValue,
   readSviAMagnitude,
   readLastTimestamp,
+  readLastBatchTimestamp,
 } from "./chain.js";
 import { signPayloadSecp256k1, frameMessage, compressedPubkeyHex } from "./signer.js";
 import {
@@ -65,17 +66,22 @@ async function relayCmd(tsArg?: string): Promise<void> {
 
   // Two signed batches (a value batch of two series + an SVI batch). Every update
   // carries its own timestamp; the demo gives them the same one so re-running with
-  // an explicit `tsMs` reproduces the pinned/non-advancing case.
+  // an explicit `tsMs` reproduces the pinned/non-advancing case. The batch timestamp
+  // is always "now", so a re-run advances it even when every update is pinned.
+  const batchTimestamp = BigInt(Date.now());
   const batches = [
     {
       kind: "value" as const,
       msg: await sign(
-        buildValueBatchPayload([valueUpdate(SPOT_SID, timestamp, SPOT), valueUpdate(FORWARD_SID, timestamp, FORWARD)]),
+        buildValueBatchPayload(batchTimestamp, [
+          valueUpdate(SPOT_SID, timestamp, SPOT),
+          valueUpdate(FORWARD_SID, timestamp, FORWARD),
+        ]),
       ),
     },
     {
       kind: "svi" as const,
-      msg: await sign(buildSviBatchPayload([sviUpdate(SVI_SID, timestamp, SVI)])),
+      msg: await sign(buildSviBatchPayload(batchTimestamp, [sviUpdate(SVI_SID, timestamp, SVI)])),
     },
   ];
 
@@ -97,6 +103,8 @@ async function relayCmd(tsArg?: string): Promise<void> {
   );
   console.log("svi a magnitude[SVI_SID]:", await readSviAMagnitude(client, dep, address, SVI_SID));
   console.log("last_timestamp[SPOT_SID]:", await readLastTimestamp(client, dep, address, SPOT_SID));
+  // Advances on every run, even one where each update is pinned and skipped.
+  console.log("last_batch_timestamp:", await readLastBatchTimestamp(client, dep, address));
 }
 
 const cmd = process.argv[2];
