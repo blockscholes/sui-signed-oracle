@@ -147,7 +147,8 @@ export interface SviParams {
 
 /// An SVI update for series `sid`, as of `timestamp`. `a`/`rho`/`m` are encoded as
 /// magnitude + sign. Same `number`/safe-integer caveat as `valueUpdate` — construct
-/// the `SviUpdate` object directly for magnitudes that need the full `u128` range.
+/// the `SviUpdate` object directly for any field that needs the full `u128` range,
+/// including `svi_b` and `svi_sigma`.
 export function sviUpdate(sid: bigint, timestamp: bigint, p: SviParams): SviUpdate {
   const a = signedFixed(p.a);
   const rho = signedFixed(p.rho);
