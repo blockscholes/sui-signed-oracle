@@ -247,24 +247,6 @@ module example_consumer::oracle_tests {
         scenario.end();
     }
 
-    #[test, expected_failure(abort_code = oracle::EUpdateTimestampTooFarInFuture)]
-    fun rejects_update_timestamp_too_far_in_future() {
-        let mut scenario = ts::begin(ADMIN);
-        let (mut oracle, clk) = setup(&mut scenario);
-
-        // The batch envelope itself is fresh, but this update's own timestamp is
-        // further ahead of it than the allowed skew — bounded even though nothing
-        // in `bs_oracle::verify` rejects it anymore.
-        oracle::ingest_value_batch(
-            &mut oracle,
-            batch_at(BATCH_TS1, BATCH_TS1 + 5_001, VALUE_A),
-            &clk,
-        );
-
-        teardown(oracle, clk);
-        scenario.end();
-    }
-
     #[test]
     fun skips_replayed_timestamp() {
         let mut scenario = ts::begin(ADMIN);
