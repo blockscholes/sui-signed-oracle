@@ -7,8 +7,12 @@
 /// `sid`'s stored timestamp, otherwise that update is skipped), and stores the latest
 /// value per `sid`, unpacking each verified update into this module's own `RawSvi` on
 /// the way in. This consumer defines the batch timestamp as milliseconds and rejects
-/// envelopes that are too old or too far ahead of Sui's `Clock`. Per-update timestamp
-/// precision and freshness remain part of each configured feed's consumer policy.
+/// envelopes that are too old or too far ahead of Sui's `Clock`. As cheap defense in
+/// depth, each per-update `timestamp` is also bounded against the already-validated
+/// batch timestamp (same skew tolerance) before the replay guard runs, so one
+/// absurdly future-dated update can't permanently poison a `sid`'s replay state.
+/// Per-update timestamp precision and finer freshness policy remain each configured
+/// feed's consumer responsibility.
 ///
 /// The greatest accepted batch `timestamp` is recorded separately as `last_batch_ts`,
 /// so a feed whose series have all gone quiet is still visibly running without an
@@ -21,6 +25,7 @@ module example_consumer::oracle {
     const EZeroValue: u64 = 1;
     const EBatchTimestampTooOld: u64 = 2;
     const EBatchTimestampTooFarInFuture: u64 = 3;
+    const EUpdateTimestampTooFarInFuture: u64 = 4;
 
     const MAX_BATCH_AGE_MS: u64 = 60_000;
     const MAX_BATCH_FUTURE_SKEW_MS: u64 = 5_000;
@@ -93,6 +98,7 @@ module example_consumer::oracle {
             let sid = u.value_sid();
             let timestamp = u.value_timestamp();
             i = i + 1;
+            assert!(timestamp <= batch_timestamp + MAX_BATCH_FUTURE_SKEW_MS, EUpdateTimestampTooFarInFuture);
             if (!replay_guard(oracle, sid, timestamp)) continue;
             let v = u.value_v();
             assert!(v > 0, EZeroValue);
@@ -119,6 +125,7 @@ module example_consumer::oracle {
             let sid = u.svi_sid();
             let timestamp = u.svi_timestamp();
             i = i + 1;
+            assert!(timestamp <= batch_timestamp + MAX_BATCH_FUTURE_SKEW_MS, EUpdateTimestampTooFarInFuture);
             if (!replay_guard(oracle, sid, timestamp)) continue;
             let (a_mag, a_neg, b, sigma, rho_mag, rho_neg, m_mag, m_neg) = u.svi_fields();
             upsert(
@@ -214,4 +221,11 @@ module example_consumer::oracle {
 
     #[test_only]
     public fun init_for_testing(ctx: &mut TxContext) { init(ctx) }
+
+    /// `(batch_timestamp, update_count, applied)` — the liveness/coverage fields
+    /// tests need off an emitted `BatchIngested`.
+    #[test_only]
+    public fun batch_ingested_for_testing(e: &BatchIngested): (u64, u64, u64) {
+        (e.batch_timestamp, e.update_count, e.applied)
+    }
 }

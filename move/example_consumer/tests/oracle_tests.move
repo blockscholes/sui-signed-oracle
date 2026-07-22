@@ -7,9 +7,9 @@
 #[test_only]
 module example_consumer::oracle_tests {
     use bs_oracle::verify::{Self, ValueBatch, SviBatch};
-    use example_consumer::oracle::{Self, ExampleOracle};
+    use example_consumer::oracle::{Self, ExampleOracle, BatchIngested};
     use std::unit_test::assert_eq;
-    use sui::{clock::{Self, Clock}, test_scenario::{Self as ts, return_shared}};
+    use sui::{clock::{Self, Clock}, event, test_scenario::{Self as ts, return_shared}};
 
     const ADMIN: address = @0xAD;
 
@@ -205,6 +205,16 @@ module example_consumer::oracle_tests {
         // ...but the batch itself is visibly newer.
         assert_eq!(oracle::last_batch_timestamp(&oracle), BATCH_TS2);
 
+        // The second batch's BatchIngested event is the observable proof of the skip:
+        // the batch carried one update, but none of them applied.
+        let events = event::events_by_type<BatchIngested>();
+        let (last_batch_timestamp, last_update_count, last_applied) = oracle::batch_ingested_for_testing(
+            &events[events.length() - 1],
+        );
+        assert_eq!(last_batch_timestamp, BATCH_TS2);
+        assert_eq!(last_update_count, 1);
+        assert_eq!(last_applied, 0);
+
         teardown(oracle, clk);
         scenario.end();
     }
@@ -222,6 +232,34 @@ module example_consumer::oracle_tests {
         assert_eq!(oracle::value(&oracle, SID_A), VALUE_B);
         assert_eq!(oracle::last_timestamp(&oracle, SID_A), TS2);
         assert_eq!(oracle::last_batch_timestamp(&oracle), BATCH_TS2);
+
+        // The second batch's own update fully applied, even though its (older) batch
+        // timestamp did not move liveness forward.
+        let events = event::events_by_type<BatchIngested>();
+        let (last_batch_timestamp, last_update_count, last_applied) = oracle::batch_ingested_for_testing(
+            &events[events.length() - 1],
+        );
+        assert_eq!(last_batch_timestamp, BATCH_TS1);
+        assert_eq!(last_update_count, 1);
+        assert_eq!(last_applied, 1);
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
+
+    #[test, expected_failure(abort_code = oracle::EUpdateTimestampTooFarInFuture)]
+    fun rejects_update_timestamp_too_far_in_future() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        // The batch envelope itself is fresh, but this update's own timestamp is
+        // further ahead of it than the allowed skew — bounded even though nothing
+        // in `bs_oracle::verify` rejects it anymore.
+        oracle::ingest_value_batch(
+            &mut oracle,
+            batch_at(BATCH_TS1, BATCH_TS1 + 5_001, VALUE_A),
+            &clk,
+        );
 
         teardown(oracle, clk);
         scenario.end();

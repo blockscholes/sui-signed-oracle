@@ -129,6 +129,10 @@ export function buildSviBatchPayload(timestamp: bigint, updates: SviUpdate[]): U
 }
 
 /// A value update for series `sid` (today: spot or forward price), as of `timestamp`.
+/// `value` is a JS `number`, so it is bounded by `toFixed`'s safe-integer check —
+/// fine at this reference client's 1e9 scale, but a client signing at a scale wide
+/// enough to need the full `u128` range should construct the `ValueUpdate` object
+/// directly with `v` as a `bigint`/decimal string instead of going through this helper.
 export function valueUpdate(sid: bigint, timestamp: bigint, value: number): ValueUpdate {
   return { sid, timestamp, v: toFixed(value) };
 }
@@ -142,7 +146,8 @@ export interface SviParams {
 }
 
 /// An SVI update for series `sid`, as of `timestamp`. `a`/`rho`/`m` are encoded as
-/// magnitude + sign.
+/// magnitude + sign. Same `number`/safe-integer caveat as `valueUpdate` — construct
+/// the `SviUpdate` object directly for magnitudes that need the full `u128` range.
 export function sviUpdate(sid: bigint, timestamp: bigint, p: SviParams): SviUpdate {
   const a = signedFixed(p.a);
   const rho = signedFixed(p.rho);

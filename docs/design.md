@@ -181,7 +181,9 @@ or reconstructed before verifying (§2). On the SUI path, SVI values are the
 **raw on-chain fields** — `svi_b`/`svi_sigma` and the signed `svi_a`/`svi_rho`/`svi_m` as `*_magnitude`
 (`u128`, scaled to the requested `decimals`) + `*_is_negative` (`bool`) — i.e. exactly the field names
 and encoding deepbook ingests, not decimal-scaled floats. Scaled values are carried as decimal
-**strings** on the wire, since at high `decimals` they exceed JSON's 2^53 safe-integer range.
+**strings** on the wire, since at high `decimals` they exceed JSON's 2^53 safe-integer range — and so
+are both timestamps, since **precision is the client's choice** (§3) and a nanosecond epoch overflows
+that same range just as easily as a wide scaled value.
 
 ```json
 {
@@ -191,11 +193,11 @@ and encoding deepbook ingests, not decimal-scaled floats. Scaled values are carr
     {
       "data": {
         "batch_kind": 1,
-        "timestamp": 1761807620000,
+        "timestamp": "1761807620000",
         "values": [
           {
             "sid": "0x9f3a…",
-            "t": 1761807600000,
+            "t": "1761807600000",
             "svi_a_magnitude": "40000000",
             "svi_a_is_negative": false,
             "svi_b": "100000000",
