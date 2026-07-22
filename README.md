@@ -11,8 +11,8 @@ batch** (`{sid, timestamp, v}` — today: spot or forward price) and an **SVI ba
 Off‑chain signing and on‑chain verification are **real secp256k1 cryptography, not mocked.** Only the
 Block Scholes market data and the Predict consumer contract are mocked.
 
-> Test inventory: 21 Move unit tests (registry + consumer logic + accessors; no network) and 22
-> TypeScript tests (7 signer/encoding + 15 live‑signed localnet e2e through a published contract).
+> Test inventory: 21 Move unit tests (registry + consumer logic + accessors; no network) and 23
+> TypeScript tests (8 signer/encoding + 15 live‑signed localnet e2e through a published contract).
 > The localnet suite is the real-signature verification gate because Move's test VM cannot sign
 > in-process.
 
@@ -196,7 +196,7 @@ sui start --with-faucet --force-regenesis
 # 3. TypeScript: signer unit tests + full live-signed localnet e2e
 cd ts
 pnpm install
-pnpm test                      # 22 tests (7 signer/encoding + 15 e2e)
+pnpm test                      # 23 tests (8 signer/encoding + 15 e2e)
 
 # 4. Manual one-shot demo
 pnpm publish-packages          # publishes both packages, sets signer, writes deployment.json
