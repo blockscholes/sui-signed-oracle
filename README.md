@@ -4,16 +4,17 @@ A working reference integration for the Predict (Mysten/deepbookv3) client: a Bl
 batch of updates, validates the signature, and produces a gated Move batch struct that can only be
 created if the batch is signed and validated** — which a mock Predict oracle then ingests, storing the
 verified value per `sid`. A batch is **homogeneous by category**, so there are two paths: a **value
-batch** (`{sid, v}` — today: spot or forward price) and an **SVI batch** (`{sid, params}`). The client sends each
-category in its own batch and holds the `sid → {type, expiry, underlying}` mapping itself.
+batch** (`{sid, timestamp, v}` — today: spot or forward price) and an **SVI batch**
+(`{sid, timestamp, params}`). The client sends each category in its own batch and holds the
+`sid → {type, expiry, underlying}` mapping itself.
 
 Off‑chain signing and on‑chain verification are **real secp256k1 cryptography, not mocked.** Only the
 Block Scholes market data and the Predict consumer contract are mocked.
 
-> Status: ✅ end‑to‑end working. 23 tests pass — 8 Move unit tests (consumer logic + accessors; no
-> network) and 15 TypeScript tests (7 signer/encoding + 8 live‑signed localnet e2e through a published
-> contract). Real‑signature verification (happy + every rejection path) is proven by the e2e, because
-> Move's test VM cannot sign in‑process.
+> Status: ✅ end‑to‑end working. 38 tests pass — 17 Move unit tests (registry + consumer logic +
+> accessors; no network) and 21 TypeScript tests (7 signer/encoding + 14 live‑signed localnet e2e
+> through a published contract). Real‑signature verification (happy + every rejection path) is
+> proven by the e2e, because Move's test VM cannot sign in‑process.
 
 ---
 
@@ -30,8 +31,8 @@ Block Scholes market data and the Predict consumer contract are mocked.
   SVI is a parameter set — each gets its own verify function. A signed `batch_kind` byte binds each
   batch to its category, so an untrusted relayer cannot feed one category to another verifier. The
   client guarantees a batch carries a single category.
-- **Minimal payload; the client owns the `sid` mapping.** An update carries only `sid` + value(s) — no
-  feed type, expiry, or underlying. The Predict client holds the `sid → {type, expiry, underlying}`
+- **Minimal payload; the client owns the `sid` mapping.** An update carries only `sid` + `timestamp` +
+  value(s) — no feed type, expiry, or underlying. The Predict client holds the `sid → {type, expiry, underlying}`
   mapping and rebuilds deepbookv3's typed update (`new_spot_update` / `new_forward_update` /
   `new_svi_update`) on its side. Our `sid` is the **full BS hash as a `u256`** (no compaction), so
   Predict widens deepbookv3's `source_id` to `u256` to match.
@@ -64,14 +65,14 @@ multicall that threads a return value into the next call):
    │     • split: signature(65) || payload                                           │
    │     • check batch_kind, prepend this package's own runtime address to payload   │
    │     • secp256k1_ecrecover(sig, address||payload, 0) == the authorized signer key │
-   │     • future-date check (timestamp not ahead of chain clock)                    │
+   │     • per-update future-date check (timestamp not ahead of chain clock)        │
    │     • RETURNS a gated `ValueBatch` (no abilities, no public ctor)               │
    └───────────────────────────────┬────────────────────────────────────────────────┘
                                    │  the ValueBatch value (same tx)
                                    ▼
    ┌── example_consumer::oracle::ingest_value_batch(oracle, batch, clock) ───┐
    │     • NO crypto — trusts the struct's type                               │
-   │     • replay guard (strict-monotonic timestamp per sid)                  │
+   │     • replay guard per sid; a non-advancing update is skipped, not fatal │
    │     • stores the value keyed by sid; emits OracleUpdated                  │
    └──────────────────────────────────────────────────────────────────────────┘
    (SVI: same shape — verify_and_create_svi_batch -> SviBatch -> ingest_svi_batch)
@@ -95,10 +96,11 @@ sui-signed-oracle/
 │   │   │   ├── registry.move              # SignerRegistry (shared) + AdminCap + single-signer (set_signer) + SignerSet event
 │   │   │   └── verify.move                # verify_and_create_{value,svi}_batch (ecrecover == signer); gated ability-less {Value,Svi}Batch + ValueUpdate/SviUpdate + BatchVerified event
 │   │   └── tests/
-│   │       └── verify_tests.move          # 2 no-crypto unit tests (value/SVI accessors)
+│   │       ├── registry_tests.move        # 5 tests (signer set/rotate + key validation, pause toggle)
+│   │       └── verify_tests.move          # 3 no-crypto unit tests (value/SVI accessors, pause gate)
 │   └── example_consumer/                  # PACKAGE 2 — the consumer (example stand-in for the Predict oracle)
-│       ├── sources/oracle.move            # ingest_{value,svi}_batch (store value per sid) + OracleUpdated event
-│       └── tests/oracle_tests.move        # 6 consumer tests (via verify::new_*_for_testing; no signing)
+│       ├── sources/oracle.move            # ingest_{value,svi}_batch: unpacks each update into its own RawSvi/u64 per sid + OracleUpdated event
+│       └── tests/oracle_tests.move        # 9 consumer tests (via verify::new_*_for_testing; no signing)
 ├── ts/                                    # off-chain signer + relayer + e2e (TypeScript)
 │   └── src/
 │       ├── config.ts                      # constants, sample data, localnet endpoints
@@ -114,8 +116,8 @@ sui-signed-oracle/
 
 ## 3. The signed batch (wire format)
 
-A Block Scholes feed publishes a **batch**: many typed updates (one per series) sharing one `timestamp`,
-signed once. A batch is homogeneous by category — a **value batch** or an **SVI
+A Block Scholes feed publishes a **batch**: many typed updates (one per series), each carrying **its own
+`timestamp`**, signed once. A batch is homogeneous by category — a **value batch** or an **SVI
 batch** — and both share one envelope. `message = signature (65 bytes) || payload`. The signature covers
 this package's own runtime address (32 bytes) prepended to the raw `payload` bytes
 (`secp256k1_ecrecover` keccak‑hashes the prefixed bytes internally) — a domain separator that makes
@@ -124,23 +126,31 @@ signer key; it is resolved on-chain via `type_name::original_id`, never transmit
 as a payload field. The `payload` itself is the BCS encoding, **in this exact field order** (TS
 `payloads.ts` ↔ Move `verify.move` must match byte‑for‑byte):
 
-| field        | type                 | meaning                                                                                                                                         |
-| ------------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `batch_kind` | `u8`                 | `0` = value, `1` = svi; each verify function asserts its own kind (no cross‑feeding by the relayer)                                             |
-| `timestamp`  | `u64`                | the batch's market‑data time, shared by every update — drives the **future‑date guard** (verifier) and **per‑`sid` replay ordering** (consumer) |
-| `updates`    | `vector<Value\|Svi>` | the category's updates; one signature covers them all                                                                                           |
+| field        | type                 | meaning                                                                                             |
+| ------------ | -------------------- | --------------------------------------------------------------------------------------------------- |
+| `batch_kind` | `u8`                 | `0` = value, `1` = svi; each verify function asserts its own kind (no cross‑feeding by the relayer) |
+| `updates`    | `vector<Value\|Svi>` | the category's updates, each carrying its own `timestamp`; one signature covers them all            |
 
 A **value batch** (`verify_and_create_value_batch`) carries `ValueUpdate` structs; an **SVI batch**
 (`verify_and_create_svi_batch`) carries `SviUpdate`. Neither has a per‑update tag — the batch is all one
 category. The `sid` is a `u256` (the full BS hash); the other numbers are `u64` @1e9:
 
-| update        | fields                                                                                                                                                                          |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ValueUpdate` | `sid: u256`, `v`                                                                                                                                                                |
-| `SviUpdate`   | `sid: u256`, `svi_a_magnitude`, `svi_a_is_negative: bool`, `svi_b`, `svi_sigma`, `svi_rho_magnitude`, `svi_rho_is_negative: bool`, `svi_m_magnitude`, `svi_m_is_negative: bool` |
+| update        | fields                                                                                                                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ValueUpdate` | `sid: u256`, `timestamp: u64`, `v`                                                                                                                                                                |
+| `SviUpdate`   | `sid: u256`, `timestamp: u64`, `svi_a_magnitude`, `svi_a_is_negative: bool`, `svi_b`, `svi_sigma`, `svi_rho_magnitude`, `svi_rho_is_negative: bool`, `svi_m_magnitude`, `svi_m_is_negative: bool` |
 
-`sid` is the series id; a value `v` is a single integer (today: spot or forward price); SVI
-`a`/`rho`/`m` are signed, carried as magnitude + `is_negative` (`b`/`sigma` are non-negative). The consumer keys storage
+Updates are **carriers, not storage types**: the batch is a hot potato (no abilities, mintable only by
+`verify`, must be consumed in the same transaction), and the updates it yields are `copy, drop` but not
+`store` — a consumer unpacks them into its own type rather than persisting ours, the same way deepbookv3
+decodes its `SVIUpdate` into a storable `RawSVI`.
+
+`sid` is the series id; `timestamp` is that series' market-data time, driving the **future-date guard**
+(verifier) and **per-`sid` replay ordering** (consumer); a value `v` is a single integer (today: spot or
+forward price); SVI `a`/`rho`/`m` are signed, carried as magnitude + `is_negative` (`b`/`sigma` are
+non-negative). Because the timestamp is per update, a series whose data hasn't advanced can be re-sent
+pinned to its original timestamp: the consumer skips it without failing the batch, so the chain keeps
+updating at a high frequency and the client can see that the series did not move. The consumer keys storage
 by `sid` and the Predict client holds the `sid → {underlying, expiry, type}` mapping, so the verifier
 does not interpret values. It proves only that the bytes are authentic, fresh Block Scholes data bound to
 this deployment.
@@ -167,8 +177,8 @@ Prereqs: `sui` CLI (tested on 1.74.1; matches CI's `SUI_VERSION`), Node + `pnpm`
 
 ```bash
 # 1. Move unit tests — consumer logic + accessors, no network required
-(cd move/bs_oracle    && sui move test --gas-limit 100000000000)   # 2 pass
-(cd move/example_consumer && sui move test --gas-limit 100000000000)   # 6 pass
+(cd move/bs_oracle    && sui move test --gas-limit 100000000000)   # 8 pass
+(cd move/example_consumer && sui move test --gas-limit 100000000000)   # 9 pass
 
 # 2. Start a local Sui network (separate terminal; Clock = real wall-time)
 sui start --with-faucet --force-regenesis
@@ -176,12 +186,12 @@ sui start --with-faucet --force-regenesis
 # 3. TypeScript: signer unit tests + full live-signed localnet e2e
 cd ts
 pnpm install
-pnpm test                      # 15 pass (7 signer/encoding + 8 e2e)
+pnpm test                      # 21 pass (7 signer/encoding + 14 e2e)
 
 # 4. Manual one-shot demo
 pnpm publish-packages          # publishes both packages, sets signer, writes deployment.json
 pnpm relay                      # signs + relays a value batch (two series) and an SVI batch (timestamp = now-5s); prints on-chain values/last_timestamp
-pnpm relay <that-timestamp>     # relay the SAME timestamp again -> transaction fails (EReplayOrStale, not strictly newer)
+pnpm relay <that-timestamp>     # relay the SAME timestamp again -> transaction succeeds as a no-op (not strictly newer, so each update is skipped and last_timestamp is unchanged)
 ```
 
 ### Local quality gate

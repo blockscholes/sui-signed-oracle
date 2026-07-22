@@ -2,7 +2,8 @@
 //   pnpm publish-packages  -> publish     publish both packages, set the signer, write deployment.json
 //   pnpm set-signer        -> set-signer  set/rotate the signer on an already-published registry
 //   pnpm relay [tsMs]      -> relay       sign + relay a value batch (two series) and an SVI batch; re-running
-//                                         with the SAME timestamp is rejected as a replay (not strictly newer)
+//                                         with the SAME timestamp succeeds as a no-op (each update's timestamp
+//                                         must be strictly newer than that sid's stored one to be applied)
 
 import { readFileSync, writeFileSync } from "node:fs";
 import {
@@ -55,24 +56,26 @@ async function relayCmd(tsArg?: string): Promise<void> {
   const { client, keypair, address } = await setupLocalnet();
 
   const timestamp = tsArg ? BigInt(tsArg) : BigInt(Date.now()) - 5_000n;
-  console.log("batch timestamp:", timestamp);
+  console.log("update timestamp:", timestamp);
 
   const sign = async (payload: Uint8Array) => {
     const signedBytes = signedBytesFor(dep.bsPackageId, payload);
     return frameMessage(await signPayloadSecp256k1(signedBytes, TEST_SIGNER_PRIV), payload);
   };
 
-  // Two signed batches (a value batch of two series + an SVI batch) sharing one timestamp.
+  // Two signed batches (a value batch of two series + an SVI batch). Every update
+  // carries its own timestamp; the demo gives them the same one so re-running with
+  // an explicit `tsMs` reproduces the pinned/non-advancing case.
   const batches = [
     {
       kind: "value" as const,
       msg: await sign(
-        buildValueBatchPayload({ timestamp }, [valueUpdate(SPOT_SID, SPOT), valueUpdate(FORWARD_SID, FORWARD)]),
+        buildValueBatchPayload([valueUpdate(SPOT_SID, timestamp, SPOT), valueUpdate(FORWARD_SID, timestamp, FORWARD)]),
       ),
     },
     {
       kind: "svi" as const,
-      msg: await sign(buildSviBatchPayload({ timestamp }, [sviUpdate(SVI_SID, SVI)])),
+      msg: await sign(buildSviBatchPayload([sviUpdate(SVI_SID, timestamp, SVI)])),
     },
   ];
 
