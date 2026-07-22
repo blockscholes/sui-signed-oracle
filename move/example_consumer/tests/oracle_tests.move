@@ -19,7 +19,7 @@ module example_consumer::oracle_tests {
     const SID_B: u256 = 11;
     const SVI_SID: u256 = 12;
 
-    // Batch market-data times; TS2 > TS1 for the monotonic case.
+    // Per-update market-data times; TS2 > TS1 for the monotonic case.
     const TS1: u64 = 1_000_000;
     const TS2: u64 = 2_000_000;
     const CLOCK_TS_MS: u64 = 2_000_000;
@@ -33,26 +33,11 @@ module example_consumer::oracle_tests {
     const SVI_M_MAG: u64 = 0;
 
     fun value_batch(timestamp: u64, v: u64): ValueBatch {
-        verify::new_value_batch_for_testing(timestamp, vector[verify::new_value_update_for_testing(SID_A, v)])
+        verify::new_value_batch_for_testing(vector[verify::new_value_update_for_testing(SID_A, timestamp, v)])
     }
 
     fun svi_batch(timestamp: u64): SviBatch {
-        verify::new_svi_batch_for_testing(
-            timestamp,
-            vector[
-                verify::new_svi_for_testing(
-                    SVI_SID,
-                    SVI_A,
-                    false,
-                    SVI_B,
-                    SVI_SIGMA,
-                    SVI_RHO_MAG,
-                    true,
-                    SVI_M_MAG,
-                    false,
-                ),
-            ],
-        )
+        svi_batch_for_sid(timestamp, SVI_SID)
     }
 
     fun setup(scenario: &mut ts::Scenario): (ExampleOracle, Clock) {
@@ -107,23 +92,58 @@ module example_consumer::oracle_tests {
     }
 
     #[test]
-    fun multi_value_batch_updates_every_sid() {
+    fun multi_value_batch_updates_every_sid_with_its_own_timestamp() {
         let mut scenario = ts::begin(ADMIN);
         let (mut oracle, clk) = setup(&mut scenario);
 
-        let batch = verify::new_value_batch_for_testing(
-            TS1,
-            vector[
-                verify::new_value_update_for_testing(SID_A, VALUE_A),
-                verify::new_value_update_for_testing(SID_B, VALUE_B),
-            ],
-        );
+        let batch = verify::new_value_batch_for_testing(vector[
+            verify::new_value_update_for_testing(SID_A, TS1, VALUE_A),
+            verify::new_value_update_for_testing(SID_B, TS2, VALUE_B),
+        ]);
         oracle::ingest_value_batch(&mut oracle, batch, &clk);
 
         assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
         assert_eq!(oracle::value(&oracle, SID_B), VALUE_B);
+        // Each sid records the timestamp of its own update.
         assert_eq!(oracle::last_timestamp(&oracle, SID_A), TS1);
-        assert_eq!(oracle::last_timestamp(&oracle, SID_B), TS1);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_B), TS2);
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
+
+    /// A series re-sent pinned to its original timestamp must not stop the other
+    /// series in the same batch from landing.
+    #[test]
+    fun stale_sid_is_skipped_without_blocking_the_rest_of_the_batch() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        oracle::ingest_value_batch(
+            &mut oracle,
+            verify::new_value_batch_for_testing(vector[
+                verify::new_value_update_for_testing(SID_A, TS1, VALUE_A),
+                verify::new_value_update_for_testing(SID_B, TS1, VALUE_A),
+            ]),
+            &clk,
+        );
+
+        // SID_A is pinned (same TS1, data hasn't moved); SID_B advances to TS2.
+        oracle::ingest_value_batch(
+            &mut oracle,
+            verify::new_value_batch_for_testing(vector[
+                verify::new_value_update_for_testing(SID_A, TS1, VALUE_B),
+                verify::new_value_update_for_testing(SID_B, TS2, VALUE_B),
+            ]),
+            &clk,
+        );
+
+        // SID_A kept its original value and timestamp: the pinned update was a no-op.
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_A), TS1);
+        // SID_B landed regardless.
+        assert_eq!(oracle::value(&oracle, SID_B), VALUE_B);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_B), TS2);
 
         teardown(oracle, clk);
         scenario.end();
@@ -144,14 +164,18 @@ module example_consumer::oracle_tests {
         scenario.end();
     }
 
-    #[test, expected_failure(abort_code = oracle::EReplayOrStale)]
-    fun rejects_replayed_timestamp() {
+    #[test]
+    fun skips_replayed_timestamp() {
         let mut scenario = ts::begin(ADMIN);
         let (mut oracle, clk) = setup(&mut scenario);
 
         oracle::ingest_value_batch(&mut oracle, value_batch(TS1, VALUE_A), &clk);
-        // same timestamp again -> not strictly greater -> rejected
-        oracle::ingest_value_batch(&mut oracle, value_batch(TS1, VALUE_A), &clk);
+        // Not strictly greater -> skipped, and the new value is discarded with it:
+        // a pinned timestamp means the series has not advanced.
+        oracle::ingest_value_batch(&mut oracle, value_batch(TS1, VALUE_B), &clk);
+
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_A), TS1);
 
         teardown(oracle, clk);
         scenario.end();
@@ -169,23 +193,34 @@ module example_consumer::oracle_tests {
     }
 
     fun svi_batch_for_sid(timestamp: u64, sid: u256): SviBatch {
-        verify::new_svi_batch_for_testing(
-            timestamp,
-            vector[
-                verify::new_svi_for_testing(sid, SVI_A, false, SVI_B, SVI_SIGMA, SVI_RHO_MAG, true, SVI_M_MAG, false),
-            ],
-        )
+        verify::new_svi_batch_for_testing(vector[
+            verify::new_svi_for_testing(
+                sid,
+                timestamp,
+                SVI_A,
+                false,
+                SVI_B,
+                SVI_SIGMA,
+                SVI_RHO_MAG,
+                true,
+                SVI_M_MAG,
+                false,
+            ),
+        ])
     }
 
-    #[test, expected_failure(abort_code = oracle::EReplayOrStale)]
-    fun rejects_value_then_svi_same_sid_same_timestamp() {
+    #[test]
+    fun skips_value_then_svi_same_sid_same_timestamp() {
         let mut scenario = ts::begin(ADMIN);
         let (mut oracle, clk) = setup(&mut scenario);
 
         oracle::ingest_value_batch(&mut oracle, value_batch(TS1, VALUE_A), &clk);
-        // same sid and timestamp as the value update above -> the replay guard spans
-        // both categories, so this is rejected even though it's a different feed type
+        // Same sid and timestamp as the value update above: the replay guard spans
+        // both categories, so this is skipped despite being a different feed type.
         oracle::ingest_svi_batch(&mut oracle, svi_batch_for_sid(TS1, SID_A), &clk);
+
+        assert!(!oracle::has_svi(&oracle, SID_A));
+        assert_eq!(oracle::last_timestamp(&oracle, SID_A), TS1);
 
         teardown(oracle, clk);
         scenario.end();

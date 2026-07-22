@@ -23,7 +23,7 @@ client subscribes → each series gets an immutable sid → BS signs a homogeneo
 2. **Sign.** Block Scholes produces the data as a self-contained **value object** and signs its
    canonical bytes with **one** secp256k1 signature over the whole batch (see §2). A batch is
    **homogeneous by category** — a value or SVI batch — and each entry is a minimal
-   `{sid, value(s)}`; the signature is batch-level, not per update.
+   `{sid, timestamp, value(s)}`; the signature is batch-level, not per update.
 3. **Fetch.** An off-chain **relayer** (run by Predict/deepbook) fetches the signed value objects. It is
    untrusted — it cannot forge or alter the data.
 
@@ -174,8 +174,8 @@ normal signed decimals.
 ```
 
 **(c) Result message** — the streamed signed data. The `data` object carries exactly what's signed —
-`batch_kind`, `timestamp`, and the `values` — nothing else needs to be prepended or reconstructed
-before verifying (§2). On the SUI path, SVI values are the
+`batch_kind` and the `values`, each value carrying its own `t` — nothing else needs to be prepended
+or reconstructed before verifying (§2). On the SUI path, SVI values are the
 **raw on-chain fields** — `svi_b`/`svi_sigma` and the signed `svi_a`/`svi_rho`/`svi_m` as `*_magnitude`
 (`u64`, 1e9-scaled) + `*_is_negative` (`bool`) — i.e. exactly the field names and encoding deepbook
 ingests, not decimal-scaled floats.
@@ -188,20 +188,18 @@ ingests, not decimal-scaled floats.
     {
       "data": {
         "batch_kind": 1,
-        "timestamp": 1761807600000,
         "values": [
           {
             "sid": "0x9f3a…",
-            "v": {
-              "svi_a_magnitude": 40000000,
-              "svi_a_is_negative": false,
-              "svi_b": 100000000,
-              "svi_sigma": 200000000,
-              "svi_rho_magnitude": 700000000,
-              "svi_rho_is_negative": true,
-              "svi_m_magnitude": 0,
-              "svi_m_is_negative": false
-            }
+            "t": 1761807600000,
+            "svi_a_magnitude": 40000000,
+            "svi_a_is_negative": false,
+            "svi_b": 100000000,
+            "svi_sigma": 200000000,
+            "svi_rho_magnitude": 700000000,
+            "svi_rho_is_negative": true,
+            "svi_m_magnitude": 0,
+            "svi_m_is_negative": false
           }
         ]
       },
@@ -238,8 +236,8 @@ secp256k1 ECDSA, recoverable, over a keccak256 digest, via `sui::ecdsa_k1` (`0x2
 
 ### 2.2 The signed batch
 
-A Block Scholes feed publishes a **batch**: many typed updates (one per series)
-sharing one `timestamp`, signed **once**. A batch is **homogeneous by category** — a
+A Block Scholes feed publishes a **batch**: many typed updates (one per series), each
+carrying **its own `timestamp`**, signed **once**. A batch is **homogeneous by category** — a
 **value batch** or an **SVI batch** — so there are two verify entry points,
 `verify_and_create_value_batch` and `verify_and_create_svi_batch`. The signature covers the
 **target package's own address, followed by the raw BCS-encoded payload bytes**; the verifier
@@ -255,8 +253,7 @@ The payload is a shared envelope plus the category's vector of typed updates:
 | Envelope field | Type | What it is | Role |
 | --- | --- | --- | --- |
 | `batch_kind` | `u8` | `0` = value, `1` = svi; each verify function asserts its own kind | Category binding — an untrusted relayer can't feed one category to another verifier |
-| `timestamp` | `u64` | The batch's market-data time (when the values are "as of"), shared by every update | **Future-date guard** — verifier rejects future-dated timestamps — **and** per-`sid` replay ordering (consumer; see §3) |
-| `updates` | `vector<ValueUpdate \| SviUpdate>` | The category's entries (see below) | One signature covers them all |
+| `updates` | `vector<ValueUpdate \| SviUpdate>` | The category's entries, each with its own `timestamp` (see below) | One signature covers them all |
 
 There's no `registry_id`/`pkg_ver` field to decode or assert. Deployment/version binding instead
 comes from what's hashed, not from a field inside it: both the signer (off-chain) and the verifier
@@ -267,8 +264,8 @@ recovers the right key when re-hashed with that same prefix, so submitting it to
 verify function fails the signer check.
 
 A **value batch** carries `ValueUpdate` structs; an **SVI batch** carries `SviUpdate`. Neither has
-a per-update tag — the batch is all one category. An update carries only its `sid` and the
-value(s); the feed type, expiry, and underlying are the consumer's `sid` mapping, not the
+a per-update tag — the batch is all one category. An update carries its `sid`, its `timestamp`,
+and the value(s); the feed type, expiry, and underlying are the consumer's `sid` mapping, not the
 payload's. Prices/params are `u64`, 1e9-scaled fixed point; SVI `a`/`rho`/`m` are signed and
 carried as **magnitude + `is_negative`** (`b`/`sigma` are non-negative).
 
@@ -277,6 +274,7 @@ carried as **magnitude + `is_negative`** (`b`/`sigma` are non-negative).
 | Field | Type | What it is |
 | --- | --- | --- |
 | `sid` | `u256` | Series id of the price feed (spot or forward) |
+| `timestamp` | `u64` | This series' market-data time (when its value is "as of") |
 | `v` | `u64` | The price |
 
 **`SviUpdate`**
@@ -284,19 +282,22 @@ carried as **magnitude + `is_negative`** (`b`/`sigma` are non-negative).
 | Field | Type | What it is |
 | --- | --- | --- |
 | `sid` | `u256` | Series id of the SVI smile |
+| `timestamp` | `u64` | This series' market-data time |
 | `svi_a_magnitude` / `svi_a_is_negative` | `u64` / `bool` | Signed `a` as magnitude + sign |
 | `svi_b`, `svi_sigma` | `u64` | SVI parameters (non-negative) |
 | `svi_rho_magnitude` / `svi_rho_is_negative` | `u64` / `bool` | Signed `rho` as magnitude + sign |
 | `svi_m_magnitude` / `svi_m_is_negative` | `u64` / `bool` | Signed `m` as magnitude + sign |
 
 ```move
-public struct ValueUpdate has copy, drop, store {
+public struct ValueUpdate has copy, drop {
     sid: u256,
+    timestamp: u64,
     v: u64,
 }
 
-public struct SviUpdate has copy, drop, store {
+public struct SviUpdate has copy, drop {
     sid: u256,
+    timestamp: u64,
     svi_a_magnitude: u64,
     svi_a_is_negative: bool,
     svi_b: u64,
@@ -308,12 +309,10 @@ public struct SviUpdate has copy, drop, store {
 }
 
 public struct ValueBatch {
-    timestamp: u64,
     updates: vector<ValueUpdate>,
 }
 
 public struct SviBatch {
-    timestamp: u64,
     updates: vector<SviUpdate>,
 }
 ```
@@ -321,6 +320,15 @@ public struct SviBatch {
 The consumer keys its storage by `sid`. The Predict client maps each `sid` to its config —
 exchange, base asset, expiry, type, etc. — and rebuilds deepbookv3's typed update (`new_spot_update` /
 `new_forward_update` / `new_svi_update`), and the verifier never interprets the values.
+
+**Updates are carriers, not storage types.** The batch is a hot potato (no abilities): only `verify`
+mints one, and it must be consumed in the minting transaction — that is what makes receiving one proof
+of a valid signature. The updates it yields are `copy, drop` but deliberately **not** `store`, so a
+consumer has to unpack them into its own representation instead of persisting ours. This mirrors
+deepbookv3, whose `SpotUpdate`/`ForwardUpdate`/`SVIUpdate` are likewise `copy, drop` and are decoded
+into a storable `RawSVI` before reaching `BlockScholesSVIFeed`'s table. It also keeps this package's
+shape out of long-lived consumer storage, which matters because each version is published
+independently and never upgraded in place (§5).
 
 > **`sid` representation.** Off-chain (wsAPI, §1) a `sid` is a Block Scholes series identifier —
 > a string, e.g. a hash of the request (`0x9f3a…`). On-chain each update carries that same hash as
@@ -330,7 +338,7 @@ exchange, base asset, expiry, type, etc. — and rebuilds deepbookv3's typed upd
 ### 2.3 Producing a signature (off-chain)
 
 ```
-payload      = BCS(batch)                        // batch_kind, timestamp, updates[]
+payload      = BCS(batch)                        // batch_kind, updates[] (each with its own timestamp)
 package_id   = pkgVerMap[pkg_ver].package_id      // resolved off-chain from the client's pkg_ver
 signed_bytes = package_id(32) ‖ payload           // domain separator: never itself transmitted
 digest       = keccak256(signed_bytes)
@@ -374,8 +382,8 @@ unrelated key and the signer check fails — this is what replaces an explicit r
 assertion. A failed check aborts (malformed signature → inside `ecrecover`; wrong key → `EBadSigner`)
 and no batch is produced.
 `verify_and_create_value_batch` / `…_svi_batch` return a gated `ValueBatch` / `SviBatch`; the
-consumer stores each value keyed by `sid`, applying per-`sid` replay protection against the batch
-`timestamp`.
+consumer stores each value keyed by `sid`, applying per-`sid` replay protection against each
+update's own `timestamp`.
 
 The registry holds exactly **one** authorized signer (`signer_pubkey`, set/rotated by the
 admin); verification requires the recovered key to equal it.
@@ -384,9 +392,9 @@ admin); verification requires the recovered key to equal it.
 
 ## 3. Replay & future-date
 
-Both key off the single `timestamp`, split by owner.
+Both key off each update's own `timestamp`, split by owner.
 
-**Future-date — the verifier** (oracle-level):
+**Future-date — the verifier** (oracle-level), enforced per update as the batch is decoded:
 
 ```move
 assert!(timestamp <= now, EFutureTimestamp);  // not future-dated
@@ -394,22 +402,32 @@ assert!(timestamp <= now, EFutureTimestamp);  // not future-dated
 
 Rejecting future-dated timestamps keeps the consumer's per-`sid` replay guard from being advanced
 past wall-clock (which would block later legitimate updates). Staleness ("too old") is left to the
-client layer — the verifier does not bound how old a batch may be.
+client layer — the verifier does not bound how old an update may be. A future-dated timestamp
+anywhere in the vector aborts the whole batch: the message is malformed, so none of it is trusted.
 
-**Replay — the consumer** (per-feed, on the batch `timestamp`):
+**Replay — the consumer** (per-feed, on each update's `timestamp`):
 
 ```move
 // per update — first update for a sid just records it; later ones must be strictly newer:
 if (last_ts.contains(sid)) {
-    assert!(timestamp > last_ts[sid], EReplayOrStale);  // strictly newer than this sid saw
+    if (timestamp <= last_ts[sid]) return false;  // skip: this series hasn't advanced
 };
-// record `timestamp` as last_ts[sid]
+// record `timestamp` as last_ts[sid], apply the update
 ```
 
-The consumer stores each `sid`'s last-applied `timestamp` and accepts an update only if the batch
-`timestamp` is strictly greater, so a replayed or out-of-order batch is rejected (any stale update
-aborts the whole batch). This assumes **per-`sid` timestamps are strictly increasing** — two updates
-for the same series must not share a millisecond, or the second is rejected as a replay.
+The consumer stores each `sid`'s last-applied `timestamp` and applies an update only if its
+`timestamp` is strictly greater. A non-advancing update is **skipped, not rejected** — the batch
+still lands and every other `sid` in it is applied normally.
+
+That skip is deliberate, and it is why the timestamp is per update rather than per batch. When a
+series' source data hasn't moved, the publisher re-sends it pinned to its **original** timestamp, so
+the chain keeps updating at a high frequency with the best data available while explicitly signalling
+that the series has not advanced. The consumer reads `last_ts[sid]` and applies its own freshness
+policy. Under a batch-level timestamp this was impossible: a pinned series either forced the whole
+batch to abort, or had to be re-stamped with a fresh time it hadn't earned.
+
+Note that a skipped update discards its value as well as its timestamp — a pinned timestamp means the
+series has not advanced, so its stored value must not move either.
 
 **Why the split.** The verifier is stateless about feeds: it only proves the signed message is
 authentic and not future-dated. The consumer owns the per-feed state, so per-`sid` replay/monotonicity
