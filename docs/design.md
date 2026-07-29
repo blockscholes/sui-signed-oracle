@@ -23,7 +23,9 @@ client subscribes → each series gets an immutable sid → BS signs a homogeneo
 2. **Sign.** Block Scholes produces the data as a self-contained **value object** and signs its
    canonical bytes with **one** secp256k1 signature over the whole batch (see §2). A batch is
    **homogeneous by category** — a value or SVI batch — and each entry is a minimal
-   `{sid, timestamp, value(s)}`; the signature is batch-level, not per update.
+   `{sid, timestamp, value(s)}`, or, for the "absolute" variants, `{sid, value(s)}` with no
+   per-update timestamp — every entry is as of the batch `timestamp` alone (§2.2); the signature
+   is batch-level, not per update.
 3. **Fetch.** An off-chain **relayer** (run by Predict/deepbook) fetches the signed value objects. It is
    untrusted — it cannot forge or alter the data.
 
@@ -178,8 +180,10 @@ unchanged — normal signed decimals.
 ```
 
 **(c) Result message** — the streamed signed data. The `data` object carries exactly what's signed —
-`batch_kind`, the envelope `timestamp`, and the `values`, each value carrying its own `t` — nothing else needs to be prepended
-or reconstructed before verifying (§2). On the SUI path, SVI values are the
+`batch_kind`, the envelope `timestamp`, and the `values`; for the non-absolute batch kinds each value
+also carries its own `t`, while the absolute kinds (`batch_kind` `2`/`3`) omit it and are as of the
+envelope `timestamp` alone (§2.2) — nothing else needs to be prepended or reconstructed before
+verifying (§2). On the SUI path, SVI values are the
 **raw on-chain fields** — `svi_b`/`svi_sigma` and the signed `svi_a`/`svi_rho`/`svi_m` as `*_magnitude`
 (`u128`, scaled to the requested `decimals`) + `*_is_negative` (`bool`) — i.e. exactly the field names
 and encoding deepbook ingests, not decimal-scaled floats. Scaled values are carried as decimal

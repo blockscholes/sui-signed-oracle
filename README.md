@@ -97,10 +97,10 @@ sui-signed-oracle/
 │   │   │   └── verify.move                # verify_and_create_{value,svi}_batch (ecrecover == signer); gated ability-less {Value,Svi}Batch + ValueUpdate/SviUpdate + BatchVerified event
 │   │   └── tests/
 │   │       ├── registry_tests.move        # 5 tests (signer set/rotate + key validation, pause toggle)
-│   │       └── verify_tests.move          # 3 no-crypto unit tests (value/SVI accessors + batch timestamp, pause gate)
+│   │       └── verify_tests.move          # 5 no-crypto unit tests (value/SVI + absolute accessors + batch timestamp, pause gate)
 │   └── example_consumer/                  # PACKAGE 2 — the consumer (example stand-in for the Predict oracle)
 │       ├── sources/oracle.move            # ingest_{value,svi}_batch: unpacks each update into its own RawSvi/u128 per sid + last_batch_ts + OracleUpdated/BatchIngested events
-│       └── tests/oracle_tests.move        # 13 consumer tests (via verify::new_*_for_testing; no signing)
+│       └── tests/oracle_tests.move        # 16 consumer tests (via verify::new_*_for_testing; no signing)
 ├── ts/                                    # off-chain signer + relayer + e2e (TypeScript)
 │   └── src/
 │       ├── config.ts                      # constants, sample data, localnet endpoints
@@ -187,8 +187,8 @@ Prereqs: `sui` CLI (tested on 1.74.1; matches CI's `SUI_VERSION`), Node + `pnpm`
 
 ```bash
 # 1. Move unit tests — consumer logic + accessors, no network required
-(cd move/bs_oracle    && sui move test --gas-limit 100000000000)   # 8 pass
-(cd move/example_consumer && sui move test --gas-limit 100000000000)   # 13 tests
+(cd move/bs_oracle    && sui move test --gas-limit 100000000000)   # 10 pass
+(cd move/example_consumer && sui move test --gas-limit 100000000000)   # 16 tests
 
 # 2. Start a local Sui network (separate terminal; Clock = real wall-time)
 sui start --with-faucet --force-regenesis
@@ -196,7 +196,7 @@ sui start --with-faucet --force-regenesis
 # 3. TypeScript: signer unit tests + full live-signed localnet e2e
 cd ts
 pnpm install
-pnpm test                      # 23 tests (8 signer/encoding + 15 e2e)
+pnpm test                      # 27 tests (8 signer/encoding + 19 e2e)
 
 # 4. Manual one-shot demo
 pnpm publish-packages          # publishes both packages, sets signer, writes deployment.json
