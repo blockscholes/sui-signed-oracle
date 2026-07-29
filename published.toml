@@ -1,0 +1,37 @@
+# Real Sui deployment record, hand-maintained.
+#
+# This is NOT the Sui CLI's `--pubfile-path` output: `sui client publish` refuses that
+# flag outright ("should not be used with the `publish` subcommand — use `test-publish`
+# instead"), so the CLI's own publish-record file only ever exists for ephemeral
+# test-publishes (see `**/Published.toml` / `**/Pub.*.toml` in .gitignore). Object ids
+# below (registry/oracle/admin cap) also aren't part of that file's schema even when it
+# does apply — the CLI only ever tracks package ids.
+#
+# Update this file by hand whenever a real deployment changes.
+
+[testnet]
+chain-id = "4c78adac"
+deployed-by = "testnet-deployer (0xd27cf21bdcc7c9805ae9e573988dd2cd80599563972ed9d0a9b9d169111912dd)"
+source-commit = "6c707ef"
+deployed-at = "2026-07-29T14:26:09Z"
+
+[testnet.bs_oracle]
+package = "0x87cc43db9b6c1e8b174841221e8e4bde5ab8fc8aaffacc58699c77e9e6340ff6"
+publish-tx = "2Faf5w6KVWSBdBYUhBjRVEhFYFPvTQ8bWNtdbKGhBPGu"
+admin-cap = "0x148fb28336b7b817d406716aaba56355b7cb5c74ed5f61f73c7a5e47c72d884c"
+signer-registry = "0xe1198f0add6ba5286d23f2790818937e4a629b95a86e98b1ece93c0ef3c2c440"
+# Not burned — package is currently mutable/upgradeable, unlike every prior
+# deployment in this repo's history (all of which burned this to go immutable).
+upgrade-cap = "0x626692f4a9454c265738a1caf72e972f8b4c696a811bd451029175563f160809"
+
+[testnet.bs_oracle.signer]
+pubkey = "0x02694b1f4be3dc6fd78a7083af3be5d91abce6be7ef5f00b9bf0a9233506ba2dd6"
+description = "production websocketAPI signer"
+set-tx = "EHbYfn2QKNHRte9oLRoa78bjj5KRighptdRuaFkdJNU3"
+
+[testnet.example_consumer]
+package = "0x7308da40420b59df73bf659849952a394e089f410a639a9fd903c34cd672d9e6"
+publish-tx = "A3An69MJYSX9WiVe2VcCscgUQZfcn2RZYSfZjPYYv13e"
+example-oracle = "0x633c12eea50ec288a3504d13a01d8e8c1c3ba8d03858418bff43498e5d924664"
+# Not burned — see testnet.bs_oracle.upgrade-cap.
+upgrade-cap = "0x25fb7ddc2a10a7dc2cca5d9f3aa1fbfef138d812ca498b786b1c10de0a694dda"
