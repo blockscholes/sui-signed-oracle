@@ -22,11 +22,10 @@ dist/
 # transient localnet deployment ids
 deployment.json
 
-# Move publish metadata — the CLI's own `--pubfile-path` output (only ever ephemeral
-# test-publish ids; `sui client publish` refuses --pubfile-path outright) always lands
-# inside a package directory. Scoped to move/*/ so it can't shadow the hand-maintained,
-# real-deployment published.toml at the repo root.
-move/*/Published.toml
+# Ephemeral addressing file `sui client test-publish --pubfile-path <name>` writes for
+# local dev-loop iteration (fake dependency addresses). NOT the same as the per-package
+# move/*/Published.toml that a real `sui client publish` writes automatically — that one
+# holds real deployment data and is committed (see move/bs_oracle/Published.toml etc).
 move/*/Pub.*.toml
 
 # read-only reference clone (do not vendor)
