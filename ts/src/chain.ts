@@ -343,16 +343,21 @@ export async function setPaused(
 
 // === Relayer ===
 
-/// Which homogeneous batch a message carries — picks the verify + ingest pair.
-export type BatchKind = "value" | "svi";
+/// Which homogeneous batch a message carries — picks the verify + ingest pair. The
+/// "absolute" kinds carry no per-update timestamp (see `bs_oracle::verify`).
+export type BatchKind = "value" | "svi" | "value_absolute" | "svi_absolute";
 
 const VERIFY_FN: Record<BatchKind, string> = {
   value: "verify_and_create_value_batch",
   svi: "verify_and_create_svi_batch",
+  value_absolute: "verify_and_create_value_absolute_batch",
+  svi_absolute: "verify_and_create_svi_absolute_batch",
 };
 const INGEST_FN: Record<BatchKind, string> = {
   value: "ingest_value_batch",
   svi: "ingest_svi_batch",
+  value_absolute: "ingest_value_absolute_batch",
+  svi_absolute: "ingest_svi_absolute_batch",
 };
 
 export interface RelayResult {

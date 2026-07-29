@@ -17,6 +17,10 @@ const ADDRESS_BYTES = 32;
 /// Batch categories (envelope `batch_kind`); must match `verify` BATCH_*.
 export const BATCH_VALUE = 0;
 export const BATCH_SVI = 1;
+/// "Absolute" variants: no per-update `timestamp` (see `ValueAbsoluteUpdate`/`SviAbsoluteUpdate`
+/// below) — every update in the batch is as of the envelope `timestamp` alone.
+export const BATCH_VALUE_ABSOLUTE = 2;
+export const BATCH_SVI_ABSOLUTE = 3;
 
 // === BCS schema ===
 
@@ -46,6 +50,30 @@ export const SviUpdate = bcs.struct("SviUpdate", {
 });
 export type SviUpdate = InferBcsInput<typeof SviUpdate>;
 
+/// A single value `v` for series `sid`, with no per-update `timestamp` — it is as of
+/// the enclosing batch's `timestamp` alone.
+export const ValueAbsoluteUpdate = bcs.struct("ValueAbsoluteUpdate", {
+  sid: bcs.u256(),
+  v: bcs.u128(),
+});
+export type ValueAbsoluteUpdate = InferBcsInput<typeof ValueAbsoluteUpdate>;
+
+/// An SVI parameter set for series `sid`, with no per-update `timestamp` — it is as
+/// of the enclosing batch's `timestamp` alone. `a`/`rho`/`m` are magnitude +
+/// `is_negative`; `b`/`sigma` are non-negative.
+export const SviAbsoluteUpdate = bcs.struct("SviAbsoluteUpdate", {
+  sid: bcs.u256(),
+  svi_a_magnitude: bcs.u128(),
+  svi_a_is_negative: bcs.bool(),
+  svi_b: bcs.u128(),
+  svi_sigma: bcs.u128(),
+  svi_rho_magnitude: bcs.u128(),
+  svi_rho_is_negative: bcs.bool(),
+  svi_m_magnitude: bcs.u128(),
+  svi_m_is_negative: bcs.bool(),
+});
+export type SviAbsoluteUpdate = InferBcsInput<typeof SviAbsoluteUpdate>;
+
 /// Shared envelope (in field order, so spreading it keeps the byte layout). Its
 /// `timestamp` is the batch's send time; each update additionally carries the time
 /// its own series is "as of" — see `ValueUpdate`/`SviUpdate`.
@@ -62,6 +90,16 @@ const ValueBatchPayload = bcs.struct("ValueBatchPayload", {
 const SviBatchPayload = bcs.struct("SviBatchPayload", {
   ...envelope,
   updates: bcs.vector(SviUpdate),
+});
+
+const ValueAbsoluteBatchPayload = bcs.struct("ValueAbsoluteBatchPayload", {
+  ...envelope,
+  updates: bcs.vector(ValueAbsoluteUpdate),
+});
+
+const SviAbsoluteBatchPayload = bcs.struct("SviAbsoluteBatchPayload", {
+  ...envelope,
+  updates: bcs.vector(SviAbsoluteUpdate),
 });
 
 /// Decode a hex string (with or without 0x) to a byte array.
@@ -128,6 +166,18 @@ export function buildSviBatchPayload(timestamp: bigint, updates: SviUpdate[]): U
   return SviBatchPayload.serialize({ batch_kind: BATCH_SVI, timestamp, updates }).toBytes();
 }
 
+/// `timestamp` is when this batch was sent, and is the only timestamp these updates
+/// carry — there is no per-update "as of" time.
+export function buildValueAbsoluteBatchPayload(timestamp: bigint, updates: ValueAbsoluteUpdate[]): Uint8Array {
+  return ValueAbsoluteBatchPayload.serialize({ batch_kind: BATCH_VALUE_ABSOLUTE, timestamp, updates }).toBytes();
+}
+
+/// `timestamp` is when this batch was sent, and is the only timestamp these updates
+/// carry — there is no per-update "as of" time.
+export function buildSviAbsoluteBatchPayload(timestamp: bigint, updates: SviAbsoluteUpdate[]): Uint8Array {
+  return SviAbsoluteBatchPayload.serialize({ batch_kind: BATCH_SVI_ABSOLUTE, timestamp, updates }).toBytes();
+}
+
 /// A value update for series `sid` (today: spot or forward price), as of `timestamp`.
 /// `value` is a JS `number`, so it is bounded by `toFixed`'s safe-integer check —
 /// fine at this reference client's 1e9 scale, but a client signing at a scale wide
@@ -135,6 +185,13 @@ export function buildSviBatchPayload(timestamp: bigint, updates: SviUpdate[]): U
 /// directly with `v` as a `bigint`/decimal string instead of going through this helper.
 export function valueUpdate(sid: bigint, timestamp: bigint, value: number): ValueUpdate {
   return { sid, timestamp, v: toFixed(value) };
+}
+
+/// A value update for series `sid` (today: spot or forward price) with no per-update
+/// timestamp — it is as of the enclosing batch's `timestamp` alone. Same `number`/
+/// safe-integer caveat as `valueUpdate`.
+export function valueAbsoluteUpdate(sid: bigint, value: number): ValueAbsoluteUpdate {
+  return { sid, v: toFixed(value) };
 }
 
 export interface SviParams {
@@ -156,6 +213,25 @@ export function sviUpdate(sid: bigint, timestamp: bigint, p: SviParams): SviUpda
   return {
     sid,
     timestamp,
+    svi_a_magnitude: a.magnitude,
+    svi_a_is_negative: a.isNegative,
+    svi_b: toFixed(p.b),
+    svi_sigma: toFixed(p.sigma),
+    svi_rho_magnitude: rho.magnitude,
+    svi_rho_is_negative: rho.isNegative,
+    svi_m_magnitude: m.magnitude,
+    svi_m_is_negative: m.isNegative,
+  };
+}
+
+/// An SVI update for series `sid` with no per-update timestamp — it is as of the
+/// enclosing batch's `timestamp` alone. Same `number`/safe-integer caveat as `sviUpdate`.
+export function sviAbsoluteUpdate(sid: bigint, p: SviParams): SviAbsoluteUpdate {
+  const a = signedFixed(p.a);
+  const rho = signedFixed(p.rho);
+  const m = signedFixed(p.m);
+  return {
+    sid,
     svi_a_magnitude: a.magnitude,
     svi_a_is_negative: a.isNegative,
     svi_b: toFixed(p.b),

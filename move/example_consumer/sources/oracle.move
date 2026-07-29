@@ -1,21 +1,23 @@
 // Copyright (c) Block Scholes.
 // SPDX-License-Identifier: Apache-2.0
 
-/// Example Predict consumer. Consumes a verified `ValueBatch` / `SviBatch` by value
-/// (it trusts the type — only `bs_oracle::verify` can mint one), does NO crypto,
-/// enforces per-`sid` replay (an update's `timestamp` must be strictly greater than the
-/// `sid`'s stored timestamp, otherwise that update is skipped), and stores the latest
-/// value per `sid`, unpacking each verified update into this module's own `RawSvi` on
-/// the way in. This consumer defines the batch timestamp as milliseconds and rejects
-/// envelopes that are too old or too far ahead of Sui's `Clock`. Per-update timestamp
-/// precision and freshness remain part of each configured feed's consumer policy.
+/// Example Predict consumer. Consumes a verified `ValueBatch` / `SviBatch` (or their
+/// "absolute" counterparts) by value (it trusts the type — only `bs_oracle::verify` can
+/// mint one), does NO crypto, enforces per-`sid` replay (an update's `timestamp` must be
+/// strictly greater than the `sid`'s stored timestamp, otherwise that update is skipped),
+/// and stores the latest value per `sid`, unpacking each verified update into this
+/// module's own `RawSvi` on the way in. This consumer defines the batch timestamp as
+/// milliseconds and rejects envelopes that are too old or too far ahead of Sui's
+/// `Clock`. Per-update timestamp precision and freshness remain part of each configured
+/// feed's consumer policy. The "absolute" batches carry no per-update timestamp, so
+/// their replay guard uses the batch's own `timestamp` for every update instead.
 ///
 /// The greatest accepted batch `timestamp` is recorded separately as `last_batch_ts`,
 /// so a feed whose series have all gone quiet is still visibly running without an
 /// out-of-order envelope regressing liveness. The real Predict consumer maps each `sid`
 /// to its `{type, expiry, underlying}` and rebuilds deepbookv3's typed update.
 module example_consumer::oracle {
-    use bs_oracle::verify::{ValueBatch, SviBatch};
+    use bs_oracle::verify::{ValueBatch, SviBatch, ValueAbsoluteBatch, SviAbsoluteBatch};
     use sui::{clock::Clock, event, table::{Self, Table}};
 
     const EZeroValue: u64 = 1;
@@ -137,6 +139,70 @@ module example_consumer::oracle {
             );
             applied = applied + 1;
             event::emit(OracleUpdated { sid, timestamp, update_ts_ms });
+        };
+        event::emit(BatchIngested { batch_timestamp, update_count: n, applied, update_ts_ms });
+    }
+
+    /// Ingest a verified value-absolute batch. There is no per-update timestamp, so
+    /// every update in the batch replays against the batch's own `timestamp`.
+    public fun ingest_value_absolute_batch(oracle: &mut ExampleOracle, batch: ValueAbsoluteBatch, clock: &Clock) {
+        let batch_timestamp = batch.value_absolute_batch_timestamp();
+        let update_ts_ms = clock.timestamp_ms();
+        validate_batch_timestamp(batch_timestamp, update_ts_ms);
+        let updates = batch.into_value_absolute_updates();
+        record_batch_timestamp(oracle, batch_timestamp);
+
+        let n = updates.length();
+        let mut applied = 0;
+        let mut i = 0;
+        while (i < n) {
+            let u = &updates[i];
+            let sid = u.value_absolute_sid();
+            i = i + 1;
+            if (!replay_guard(oracle, sid, batch_timestamp)) continue;
+            let v = u.value_absolute_v();
+            assert!(v > 0, EZeroValue);
+            upsert(&mut oracle.values, sid, v);
+            applied = applied + 1;
+            event::emit(OracleUpdated { sid, timestamp: batch_timestamp, update_ts_ms });
+        };
+        event::emit(BatchIngested { batch_timestamp, update_count: n, applied, update_ts_ms });
+    }
+
+    /// Ingest a verified SVI-absolute batch (see `ingest_value_absolute_batch` for the
+    /// batch-timestamp-as-replay-key rationale).
+    public fun ingest_svi_absolute_batch(oracle: &mut ExampleOracle, batch: SviAbsoluteBatch, clock: &Clock) {
+        let batch_timestamp = batch.svi_absolute_batch_timestamp();
+        let update_ts_ms = clock.timestamp_ms();
+        validate_batch_timestamp(batch_timestamp, update_ts_ms);
+        let updates = batch.into_svi_absolute_updates();
+        record_batch_timestamp(oracle, batch_timestamp);
+
+        let n = updates.length();
+        let mut applied = 0;
+        let mut i = 0;
+        while (i < n) {
+            let u = &updates[i];
+            let sid = u.svi_absolute_sid();
+            i = i + 1;
+            if (!replay_guard(oracle, sid, batch_timestamp)) continue;
+            let (a_mag, a_neg, b, sigma, rho_mag, rho_neg, m_mag, m_neg) = u.svi_absolute_fields();
+            upsert(
+                &mut oracle.svis,
+                sid,
+                RawSvi {
+                    svi_a_magnitude: a_mag,
+                    svi_a_is_negative: a_neg,
+                    svi_b: b,
+                    svi_sigma: sigma,
+                    svi_rho_magnitude: rho_mag,
+                    svi_rho_is_negative: rho_neg,
+                    svi_m_magnitude: m_mag,
+                    svi_m_is_negative: m_neg,
+                },
+            );
+            applied = applied + 1;
+            event::emit(OracleUpdated { sid, timestamp: batch_timestamp, update_ts_ms });
         };
         event::emit(BatchIngested { batch_timestamp, update_count: n, applied, update_ts_ms });
     }

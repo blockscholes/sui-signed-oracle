@@ -6,7 +6,7 @@
 /// by the live-signed localnet e2e in `ts/src/e2e.test.ts`.
 #[test_only]
 module example_consumer::oracle_tests {
-    use bs_oracle::verify::{Self, ValueBatch, SviBatch};
+    use bs_oracle::verify::{Self, ValueBatch, SviBatch, ValueAbsoluteBatch, SviAbsoluteBatch};
     use example_consumer::oracle::{Self, ExampleOracle, BatchIngested};
     use std::unit_test::assert_eq;
     use sui::{clock::{Self, Clock}, event, test_scenario::{Self as ts, return_shared}};
@@ -98,6 +98,120 @@ module example_consumer::oracle_tests {
         assert_eq!(m_mag, SVI_M_MAG);
         assert!(!m_neg);
         assert_eq!(oracle::last_timestamp(&oracle, SVI_SID), TS1);
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
+
+    #[test]
+    fun full_flow_value_absolute() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        let batch: ValueAbsoluteBatch = verify::new_value_absolute_batch_for_testing(
+            BATCH_TS1,
+            vector[verify::new_value_absolute_update_for_testing(SID_A, VALUE_A)],
+        );
+        oracle::ingest_value_absolute_batch(&mut oracle, batch, &clk);
+
+        assert!(oracle::has_value(&oracle, SID_A));
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
+        // No per-update timestamp: the batch's own timestamp is the replay key.
+        assert_eq!(oracle::last_timestamp(&oracle, SID_A), BATCH_TS1);
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
+
+    #[test]
+    fun full_flow_svi_absolute() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        let batch: SviAbsoluteBatch = verify::new_svi_absolute_batch_for_testing(
+            BATCH_TS1,
+            vector[
+                verify::new_svi_absolute_for_testing(
+                    SVI_SID,
+                    SVI_A,
+                    false,
+                    SVI_B,
+                    SVI_SIGMA,
+                    SVI_RHO_MAG,
+                    true,
+                    SVI_M_MAG,
+                    false,
+                ),
+            ],
+        );
+        oracle::ingest_svi_absolute_batch(&mut oracle, batch, &clk);
+
+        let (a_mag, a_neg, b, sigma, rho_mag, rho_neg, m_mag, m_neg) = oracle::svi_params(&oracle, SVI_SID);
+        assert_eq!(a_mag, SVI_A);
+        assert!(!a_neg);
+        assert_eq!(b, SVI_B);
+        assert_eq!(sigma, SVI_SIGMA);
+        assert_eq!(rho_mag, SVI_RHO_MAG);
+        assert!(rho_neg);
+        assert_eq!(m_mag, SVI_M_MAG);
+        assert!(!m_neg);
+        assert_eq!(oracle::last_timestamp(&oracle, SVI_SID), BATCH_TS1);
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
+
+    /// Every update in an absolute batch shares the same replay key (the batch
+    /// timestamp), so a re-sent batch with an unchanged timestamp is a no-op for all
+    /// of its sids at once — there's no per-sid pinning like the non-absolute path.
+    #[test]
+    fun multi_value_absolute_batch_replays_against_the_shared_batch_timestamp() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        oracle::ingest_value_absolute_batch(
+            &mut oracle,
+            verify::new_value_absolute_batch_for_testing(
+                BATCH_TS1,
+                vector[
+                    verify::new_value_absolute_update_for_testing(SID_A, VALUE_A),
+                    verify::new_value_absolute_update_for_testing(SID_B, VALUE_A),
+                ],
+            ),
+            &clk,
+        );
+
+        // Same batch timestamp again, different values -> both sids skipped.
+        oracle::ingest_value_absolute_batch(
+            &mut oracle,
+            verify::new_value_absolute_batch_for_testing(
+                BATCH_TS1,
+                vector[
+                    verify::new_value_absolute_update_for_testing(SID_A, VALUE_B),
+                    verify::new_value_absolute_update_for_testing(SID_B, VALUE_B),
+                ],
+            ),
+            &clk,
+        );
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
+        assert_eq!(oracle::value(&oracle, SID_B), VALUE_A);
+
+        // A strictly newer batch timestamp advances every sid.
+        oracle::ingest_value_absolute_batch(
+            &mut oracle,
+            verify::new_value_absolute_batch_for_testing(
+                BATCH_TS2,
+                vector[
+                    verify::new_value_absolute_update_for_testing(SID_A, VALUE_B),
+                    verify::new_value_absolute_update_for_testing(SID_B, VALUE_B),
+                ],
+            ),
+            &clk,
+        );
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_B);
+        assert_eq!(oracle::value(&oracle, SID_B), VALUE_B);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_A), BATCH_TS2);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_B), BATCH_TS2);
 
         teardown(oracle, clk);
         scenario.end();

@@ -23,7 +23,9 @@ client subscribes → each series gets an immutable sid → BS signs a homogeneo
 2. **Sign.** Block Scholes produces the data as a self-contained **value object** and signs its
    canonical bytes with **one** secp256k1 signature over the whole batch (see §2). A batch is
    **homogeneous by category** — a value or SVI batch — and each entry is a minimal
-   `{sid, timestamp, value(s)}`; the signature is batch-level, not per update.
+   `{sid, timestamp, value(s)}`, or, for the "absolute" variants, `{sid, value(s)}` with no
+   per-update timestamp — every entry is as of the batch `timestamp` alone (§2.2); the signature
+   is batch-level, not per update.
 3. **Fetch.** An off-chain **relayer** (run by Predict/deepbook) fetches the signed value objects. It is
    untrusted — it cannot forge or alter the data.
 
@@ -67,7 +69,9 @@ are authentically signed but never interprets them. Two consequences:
   base/quote, model, expiry, frequency, datatype, and **scale/decimals**. BS stores the `sid ↔ format`
   binding, so a config change (e.g. different `decimals`) gets a **fresh** `sid` and a `sid` never
   changes meaning. Receiving `{sid, value}` therefore tells the consumer exactly how to interpret the
-  value.
+  value. The hash also folds in the **signing domain** — `network`/`pkg_ver` for SUI, the EIP-712
+  domain for EVM — so subscribing the same feed under a different `pkg_ver` or network yields a
+  **different** `sid` (see the version-upgrade note in §5).
 - **The client can use it as an integrity check on its own side.** Because the `sid` is a deterministic
   commitment to the config, the Predict consumer can reconstruct it from the config of the slot it is
   about to write to and confirm it matches the incoming `sid` before storing — catching **client-side**
@@ -78,10 +82,10 @@ are authentically signed but never interprets them. Two consequences:
 **(a) Subscribe request** — no `sid` supplied, so BS generates one by hashing all of the request
 item's fields.
 
-The `options.signing` object controls the signature scheme, and **the data is signed only when it is
-present** in the subscription — omit `signing` and the data is streamed **unsigned** (the existing wsAPI
-behaviour). When `signing` is present, `type` defaults to `"EVM"`; clients receiving Sui-verified
-batches set `type: "SUI"`. In the SUI case: `pkg_ver` selects which verifying-package version Block
+The `options.signature` object controls the signature scheme, and **the data is signed only when it is
+present** in the subscription — omit `signature` and the data is streamed **unsigned** (the existing wsAPI
+behaviour). When `signature` is present, `type` defaults to `"EVM"`; clients receiving Sui-verified
+batches set `type: "SUI"`. In the SUI case: `domain.pkg_ver` selects which verifying-package version Block
 Scholes signs for (`1` by default) — a purely off-chain lookup key Block Scholes uses to pick the
 target package/registry (see §5); it is never itself part of the signed bytes. `signature_schema`
 selects the signing algorithm (`"ecdsa"` by default; `"ed25519"` will be supported in future);
@@ -89,10 +93,10 @@ selects the signing algorithm (`"ecdsa"` by default; `"ed25519"` will be support
 
 Choosing `type: "SUI"` also fixes the **value encoding**: because Move has no signed or
 floating-point type, every number is a fixed-point integer at the client's chosen `decimals`
-and signed parameters (SVI `rho`/`m`) are carried as `*_magnitude` (`u128`) + `*_is_negative`
-(`bool`). The contract stores the integers verbatim and never rescales, so the scale is an
-off-chain agreement between the signer and the consumer. The default/EVM path is unchanged —
-normal signed decimals.
+(`0`–`38`, the `u128` limit) and signed parameters (SVI `rho`/`m`) are carried as `*_magnitude`
+(`u128`) + `*_is_negative` (`bool`). The contract stores the integers verbatim and never rescales,
+so the scale is an off-chain agreement between the signer and the consumer. The default/EVM path is
+unchanged — normal signed decimals.
 
 ```json
 {
@@ -119,12 +123,12 @@ normal signed decimals.
           "hexify": false,
           "decimals": 9
         },
-        "signing": {
+        "signature": {
           "type": "SUI",
-          "pkg_ver": 1,
           "signature_schema": "ecdsa",
           "domain": {
-            "network": "mainnet"
+            "network": "mainnet",
+            "pkg_ver": 1
           }
         }
       }
@@ -160,12 +164,12 @@ normal signed decimals.
             "hexify": false,
             "decimals": 9
           },
-          "signing": {
+          "signature": {
             "type": "SUI",
-            "pkg_ver": 1,
             "signature_schema": "ecdsa",
             "domain": {
-              "network": "mainnet"
+              "network": "mainnet",
+              "pkg_ver": 1
             }
           }
         }
@@ -176,8 +180,10 @@ normal signed decimals.
 ```
 
 **(c) Result message** — the streamed signed data. The `data` object carries exactly what's signed —
-`batch_kind`, the envelope `timestamp`, and the `values`, each value carrying its own `t` — nothing else needs to be prepended
-or reconstructed before verifying (§2). On the SUI path, SVI values are the
+`batch_kind`, the envelope `timestamp`, and the `values`; for the non-absolute batch kinds each value
+also carries its own `t`, while the absolute kinds (`batch_kind` `2`/`3`) omit it and are as of the
+envelope `timestamp` alone (§2.2) — nothing else needs to be prepended or reconstructed before
+verifying (§2). On the SUI path, SVI values are the
 **raw on-chain fields** — `svi_b`/`svi_sigma` and the signed `svi_a`/`svi_rho`/`svi_m` as `*_magnitude`
 (`u128`, scaled to the requested `decimals`) + `*_is_negative` (`bool`) — i.e. exactly the field names
 and encoding deepbook ingests, not decimal-scaled floats. Scaled values are carried as decimal
@@ -244,8 +250,11 @@ secp256k1 ECDSA, recoverable, over a keccak256 digest, via `sui::ecdsa_k1` (`0x2
 
 A Block Scholes feed publishes a **batch**: many typed updates (one per series), each
 carrying **its own `timestamp`**, under one **batch `timestamp`**, signed **once**. A batch is **homogeneous by category** — a
-**value batch** or an **SVI batch** — so there are two verify entry points,
-`verify_and_create_value_batch` and `verify_and_create_svi_batch`. The signature covers the
+**value batch** or an **SVI batch** — so there are four verify entry points:
+`verify_and_create_value_batch` and `verify_and_create_svi_batch`, plus two "absolute"
+variants, `verify_and_create_value_absolute_batch` and `verify_and_create_svi_absolute_batch`,
+whose updates drop the per-update `timestamp` entirely and are as of the batch `timestamp`
+alone (see below). The signature covers the
 **target package's own address, followed by the raw BCS-encoded payload bytes**; the verifier
 reconstructs the same prefixed bytes on-chain, so they must be byte-identical (§2.4).
 
@@ -253,14 +262,16 @@ reconstructs the same prefixed bytes on-chain, so they must be byte-identical (�
 | --- | --- | --- | --- |
 | Spot / forward price | Value batch | `0` | `verify_and_create_value_batch` |
 | SVI params | SVI batch | `1` | `verify_and_create_svi_batch` |
+| Spot / forward price, no per-update timestamp | Value absolute batch | `2` | `verify_and_create_value_absolute_batch` |
+| SVI params, no per-update timestamp | SVI absolute batch | `3` | `verify_and_create_svi_absolute_batch` |
 
 The payload is a shared envelope plus the category's vector of typed updates:
 
 | Envelope field | Type | What it is | Role |
 | --- | --- | --- | --- |
-| `batch_kind` | `u8` | `0` = value, `1` = svi; each verify function asserts its own kind | Category binding — an untrusted relayer can't feed one category to another verifier |
-| `timestamp` | `u64` | When the publisher sent this batch | Feed liveness — advances every flush even when no series moved (§3) |
-| `updates` | `vector<ValueUpdate \| SviUpdate>` | The category's entries, each with its own `timestamp` (see below) | One signature covers them all |
+| `batch_kind` | `u8` | `0`/`1`/`2`/`3` = value / svi / value-absolute / svi-absolute; each verify function asserts its own kind | Category binding — an untrusted relayer can't feed one category to another verifier |
+| `timestamp` | `u64` | When the publisher sent this batch | Feed liveness — advances every flush even when no series moved (§3); for the absolute variants, also the only "as of" time their updates have |
+| `updates` | `vector<ValueUpdate \| SviUpdate \| ValueAbsoluteUpdate \| SviAbsoluteUpdate>` | The category's entries — the non-absolute variants each with their own `timestamp` (see below) | One signature covers them all |
 
 There's no `registry_id`/`pkg_ver` field to decode or assert. Deployment/version binding instead
 comes from what's hashed, not from a field inside it: both the signer (off-chain) and the verifier
@@ -295,6 +306,10 @@ payload's. Prices/params are `u128` fixed-point integers at the client's chosen 
 | `svi_rho_magnitude` / `svi_rho_is_negative` | `u128` / `bool` | Signed `rho` as magnitude + sign |
 | `svi_m_magnitude` / `svi_m_is_negative` | `u128` / `bool` | Signed `m` as magnitude + sign |
 
+The **absolute** variants, `ValueAbsoluteUpdate`/`SviAbsoluteUpdate`, carry the same fields minus
+`timestamp` — every update in one of these batches is as of the envelope `timestamp` alone, so a
+consumer using them forgoes per-`sid` "as of" precision in exchange for a smaller payload.
+
 ```move
 public struct ValueUpdate has copy, drop {
     sid: u256,
@@ -315,6 +330,23 @@ public struct SviUpdate has copy, drop {
     svi_m_is_negative: bool,
 }
 
+public struct ValueAbsoluteUpdate has copy, drop {
+    sid: u256,
+    v: u128,
+}
+
+public struct SviAbsoluteUpdate has copy, drop {
+    sid: u256,
+    svi_a_magnitude: u128,
+    svi_a_is_negative: bool,
+    svi_b: u128,
+    svi_sigma: u128,
+    svi_rho_magnitude: u128,
+    svi_rho_is_negative: bool,
+    svi_m_magnitude: u128,
+    svi_m_is_negative: bool,
+}
+
 public struct ValueBatch {
     timestamp: u64,
     updates: vector<ValueUpdate>,
@@ -323,6 +355,16 @@ public struct ValueBatch {
 public struct SviBatch {
     timestamp: u64,
     updates: vector<SviUpdate>,
+}
+
+public struct ValueAbsoluteBatch {
+    timestamp: u64,
+    updates: vector<ValueAbsoluteUpdate>,
+}
+
+public struct SviAbsoluteBatch {
+    timestamp: u64,
+    updates: vector<SviAbsoluteUpdate>,
 }
 ```
 
@@ -495,7 +537,7 @@ actually constructs one — making the `UpgradeCap` holder a total-forgery singl
 ## 5. Package versioning & upgrades
 
 `pkg_ver` is an **off-chain lookup key**, not an on-chain field: a client requesting
-`options.signing.pkg_ver: N` tells Block Scholes which verifying-package version to sign for. A new
+`options.signature.domain.pkg_ver: N` tells Block Scholes which verifying-package version to sign for. A new
 data type or feed is a `verify.move` change (new `*Update` + `batch_kind` + `verify_and_create_*_batch`,
 or a struct change), so Block Scholes **publishes a brand-new package** — its own package id *and* its
 own `SignerRegistry`. Block Scholes keeps an off-chain `pkg_ver → { package_id, registry_id }` map;
@@ -511,9 +553,11 @@ checked by `package_id_M`'s own code (§2.4) — every other version's `ecrecove
 even though every version's registry shares the same signer key: nothing about the key distinguishes
 versions, the address prefix does. Existing v1 integrations keep working unchanged.
 
-**Client upgrade (v1 → v2):** request `pkg_ver: 2` (`options.signing.pkg_ver`), repoint the Move.toml
-dependency at `package_id_2`, reference its `SignerRegistry` object / call `package_id_2::verify::…`
-in the PTB, then redeploy.
+**Client upgrade (v1 → v2):** request `pkg_ver: 2` (`options.signature.domain.pkg_ver`), repoint the
+Move.toml dependency at `package_id_2`, reference its `SignerRegistry` object / call
+`package_id_2::verify::…` in the PTB, then redeploy. Because `pkg_ver` is folded into the `sid` hash
+(see [Subscription & sid](#subscription--sid)), this upgrade mints a **new** `sid` for every affected
+feed — the client must pick up the newly resolved v2 sids rather than reusing the v1 ones.
 
 In-place Sui upgrades keep one registry but split the client across two ids (type-origin vs.
 new-code); an independent package avoids that, trading a re-published registry for a single id

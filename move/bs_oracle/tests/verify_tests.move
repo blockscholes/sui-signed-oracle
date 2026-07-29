@@ -113,6 +113,85 @@ module bs_oracle::verify_tests {
         assert!(m_neg2);
     }
 
+    #[test]
+    fun value_absolute_batch_accessors_round_trip() {
+        // No per-update timestamp to distinguish — the batch timestamp alone applies.
+        // SID_A's value is above u64::MAX to prove the u128 width round-trips.
+        let updates = vector[
+            verify::new_value_absolute_update_for_testing(SID_A, ABOVE_U64_MAX),
+            verify::new_value_absolute_update_for_testing(SID_B, 65_250_000_000_000),
+        ];
+        let batch = verify::new_value_absolute_batch_for_testing(BATCH_TS, updates);
+
+        assert_eq!(batch.value_absolute_batch_timestamp(), BATCH_TS);
+
+        let out = batch.into_value_absolute_updates();
+        assert_eq!(out.length(), 2);
+        assert_eq!(out[0].value_absolute_sid(), SID_A);
+        assert_eq!(out[0].value_absolute_v(), ABOVE_U64_MAX);
+        assert_eq!(out[1].value_absolute_sid(), SID_B);
+        assert_eq!(out[1].value_absolute_v(), 65_250_000_000_000);
+    }
+
+    #[test]
+    fun svi_absolute_batch_accessors_round_trip() {
+        // Distinct sids, no per-update timestamp. The first update's `a`/`rho`
+        // magnitudes are above u64::MAX, to prove the u128 width round-trips on the
+        // signed (magnitude + is_negative) fields too.
+        let updates = vector[
+            // svi_a negative here, to prove the signed `a` round-trips.
+            verify::new_svi_absolute_for_testing(
+                SVI_SID,
+                ABOVE_U64_MAX,
+                true,
+                100_000_000,
+                200_000_000,
+                ABOVE_U64_MAX,
+                true,
+                0,
+                false,
+            ),
+            verify::new_svi_absolute_for_testing(
+                SID_B,
+                10_000_000,
+                false,
+                50_000_000,
+                60_000_000,
+                80_000_000,
+                false,
+                5_000_000,
+                true,
+            ),
+        ];
+        let batch = verify::new_svi_absolute_batch_for_testing(BATCH_TS, updates);
+
+        assert_eq!(batch.svi_absolute_batch_timestamp(), BATCH_TS);
+
+        let out = batch.into_svi_absolute_updates();
+        assert_eq!(out.length(), 2);
+        assert_eq!(out[0].svi_absolute_sid(), SVI_SID);
+        let (a_mag, a_neg, b, sigma, rho_mag, rho_neg, m_mag, m_neg) = out[0].svi_absolute_fields();
+        assert_eq!(a_mag, ABOVE_U64_MAX);
+        assert!(a_neg);
+        assert_eq!(b, 100_000_000);
+        assert_eq!(sigma, 200_000_000);
+        assert_eq!(rho_mag, ABOVE_U64_MAX);
+        assert!(rho_neg);
+        assert_eq!(m_mag, 0);
+        assert!(!m_neg);
+
+        assert_eq!(out[1].svi_absolute_sid(), SID_B);
+        let (a_mag2, a_neg2, b2, sigma2, rho_mag2, rho_neg2, m_mag2, m_neg2) = out[1].svi_absolute_fields();
+        assert_eq!(a_mag2, 10_000_000);
+        assert!(!a_neg2);
+        assert_eq!(b2, 50_000_000);
+        assert_eq!(sigma2, 60_000_000);
+        assert_eq!(rho_mag2, 80_000_000);
+        assert!(!rho_neg2);
+        assert_eq!(m_mag2, 5_000_000);
+        assert!(m_neg2);
+    }
+
     // `verify_header` checks pause before signature/message parsing, so this exercises
     // the gate directly with a throwaway message rather than needing a real signature.
     #[test, expected_failure(abort_code = verify::EPaused)]

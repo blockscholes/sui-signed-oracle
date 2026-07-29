@@ -3,16 +3,17 @@
 A working reference integration for the Predict (Mysten/deepbookv3) client: a Block Scholes package that **takes a signed
 batch of updates, validates the signature, and produces a gated Move batch struct that can only be
 created if the batch is signed and validated** — which a mock Predict oracle then ingests, storing the
-verified value per `sid`. A batch is **homogeneous by category**, so there are two paths: a **value
+verified value per `sid`. A batch is **homogeneous by category**, so there are four paths: a **value
 batch** (`{sid, timestamp, v}` — today: spot or forward price) and an **SVI batch**
-(`{sid, timestamp, params}`). The client sends each category in its own batch and holds the
+(`{sid, timestamp, params}`), plus an **absolute** variant of each (`{sid, v}` / `{sid, params}`,
+timed by the batch envelope alone). The client sends each category in its own batch and holds the
 `sid → {type, expiry, underlying}` mapping itself.
 
 Off‑chain signing and on‑chain verification are **real secp256k1 cryptography, not mocked.** Only the
 Block Scholes market data and the Predict consumer contract are mocked.
 
-> Test inventory: 21 Move unit tests (registry + consumer logic + accessors; no network) and 23
-> TypeScript tests (8 signer/encoding + 15 live‑signed localnet e2e through a published contract).
+> Test inventory: 26 Move unit tests (registry + consumer logic + accessors; no network) and 27
+> TypeScript tests (8 signer/encoding + 19 live‑signed localnet e2e through a published contract).
 > The localnet suite is the real-signature verification gate because Move's test VM cannot sign
 > in-process.
 
@@ -21,16 +22,18 @@ Block Scholes market data and the Predict consumer contract are mocked.
 ## Summary — design decisions
 
 - **The gated‑struct pattern.** An off‑chain signer signs a batch of updates; an on‑chain verify
-  function — `verify_and_create_value_batch` or `verify_and_create_svi_batch`
+  function — `verify_and_create_value_batch`/`verify_and_create_svi_batch`, or their "absolute"
+  counterparts `verify_and_create_value_absolute_batch`/`verify_and_create_svi_absolute_batch`
   `(&SignerRegistry, vector<u8>)` — verifies the one signature over the whole batch and returns a
-  gated `ValueBatch` / `SviBatch` struct. The struct has
+  gated `ValueBatch` / `SviBatch` / `ValueAbsoluteBatch` / `SviAbsoluteBatch` struct. The struct has
   **no public constructor** and **no abilities**, so the only way one can exist is through the verifier —
   and it must be consumed in the same transaction. The Predict consumer then ingests that
   already‑verified batch and does **zero** crypto itself: it trusts the struct's _type_.
-- **Two verify paths, homogeneous batches.** A value update is scalar (`{sid, v}` — today: spot or forward price);
-  SVI is a parameter set — each gets its own verify function. A signed `batch_kind` byte binds each
-  batch to its category, so an untrusted relayer cannot feed one category to another verifier. The
-  client guarantees a batch carries a single category.
+- **Four verify paths, homogeneous batches.** A value update is scalar (`{sid, v}` — today: spot or forward price);
+  SVI is a parameter set — each gets its own verify function, plus an "absolute" variant that drops
+  the per-update `timestamp` (every entry is as of the batch `timestamp` alone). A signed `batch_kind`
+  byte binds each batch to its category, so an untrusted relayer cannot feed one category to another
+  verifier. The client guarantees a batch carries a single category.
 - **Minimal payload; the client owns the `sid` mapping.** An update carries only `sid` + `timestamp` +
   value(s) — no feed type, expiry, or underlying. The Predict client holds the `sid → {type, expiry, underlying}`
   mapping and rebuilds deepbookv3's typed update (`new_spot_update` / `new_forward_update` /
@@ -76,10 +79,14 @@ multicall that threads a return value into the next call):
    │     • stores the value keyed by sid; emits OracleUpdated + BatchIngested  │
    └──────────────────────────────────────────────────────────────────────────┘
    (SVI: same shape — verify_and_create_svi_batch -> SviBatch -> ingest_svi_batch)
+   (absolute variants: same shape, no per-update timestamp —
+    verify_and_create_{value,svi}_absolute_batch -> {Value,Svi}AbsoluteBatch ->
+    ingest_{value,svi}_absolute_batch)
 ```
 
 If the signature is bad, the verify step aborts and the consumer step never runs. The gated batch
-(`ValueBatch` / `SviBatch`) has **no `copy`/`drop`/`store`/`key` abilities**, so the Sui runtime forces
+(`ValueBatch` / `SviBatch` / `ValueAbsoluteBatch` / `SviAbsoluteBatch`) has **no
+`copy`/`drop`/`store`/`key` abilities**, so the Sui runtime forces
 the relayer to consume it in the same transaction — it cannot be stored, duplicated, or silently dropped,
 and (because Move only lets a struct be packed in its defining module) it cannot be forged outside the
 verifier. This is the on‑chain proof that the data was signed and validated.
@@ -94,13 +101,13 @@ sui-signed-oracle/
 │   ├── bs_oracle/                         # PACKAGE 1 — the verifier
 │   │   ├── sources/
 │   │   │   ├── registry.move              # SignerRegistry (shared) + AdminCap + single-signer (set_signer) + SignerSet event
-│   │   │   └── verify.move                # verify_and_create_{value,svi}_batch (ecrecover == signer); gated ability-less {Value,Svi}Batch + ValueUpdate/SviUpdate + BatchVerified event
+│   │   │   └── verify.move                # verify_and_create_{value,svi}_batch + {value,svi}_absolute_batch (ecrecover == signer); gated ability-less Value/Svi/ValueAbsolute/SviAbsolute Batch + Update + BatchVerified event
 │   │   └── tests/
 │   │       ├── registry_tests.move        # 5 tests (signer set/rotate + key validation, pause toggle)
-│   │       └── verify_tests.move          # 3 no-crypto unit tests (value/SVI accessors + batch timestamp, pause gate)
+│   │       └── verify_tests.move          # 5 no-crypto unit tests (value/SVI + absolute accessors + batch timestamp, pause gate)
 │   └── example_consumer/                  # PACKAGE 2 — the consumer (example stand-in for the Predict oracle)
-│       ├── sources/oracle.move            # ingest_{value,svi}_batch: unpacks each update into its own RawSvi/u128 per sid + last_batch_ts + OracleUpdated/BatchIngested events
-│       └── tests/oracle_tests.move        # 13 consumer tests (via verify::new_*_for_testing; no signing)
+│       ├── sources/oracle.move            # ingest_{value,svi}_batch + {value,svi}_absolute_batch: unpacks each update into its own RawSvi/u128 per sid + last_batch_ts + OracleUpdated/BatchIngested events
+│       └── tests/oracle_tests.move        # 16 consumer tests (via verify::new_*_for_testing; no signing)
 ├── ts/                                    # off-chain signer + relayer + e2e (TypeScript)
 │   └── src/
 │       ├── config.ts                      # constants, sample data, localnet endpoints
@@ -117,8 +124,10 @@ sui-signed-oracle/
 ## 3. The signed batch (wire format)
 
 A Block Scholes feed publishes a **batch**: many typed updates (one per series), each carrying **its own
-`timestamp`**, under one **batch `timestamp`**, signed once. A batch is homogeneous by category — a
-**value batch** or an **SVI batch** — and both share one envelope. `message = signature (65 bytes) || payload`. The signature covers
+`timestamp`** (or, for the "absolute" kinds, no per-update timestamp at all — see below), under one
+**batch `timestamp`**, signed once. A batch is homogeneous by category — a **value batch**, an **SVI
+batch**, or one of their **absolute** counterparts — and all share one envelope.
+`message = signature (65 bytes) || payload`. The signature covers
 this package's own runtime address (32 bytes) prepended to the raw `payload` bytes
 (`secp256k1_ecrecover` keccak‑hashes the prefixed bytes internally) — a domain separator that makes
 signatures non‑interchangeable across package versions even though every version's registry shares one
@@ -126,22 +135,27 @@ signer key; it is resolved on-chain via `type_name::original_id`, never transmit
 as a payload field. The `payload` itself is the BCS encoding, **in this exact field order** (TS
 `payloads.ts` ↔ Move `verify.move` must match byte‑for‑byte):
 
-| field        | type                 | meaning                                                                                             |
-| ------------ | -------------------- | --------------------------------------------------------------------------------------------------- |
-| `batch_kind` | `u8`                 | `0` = value, `1` = svi; each verify function asserts its own kind (no cross‑feeding by the relayer) |
-| `timestamp`  | `u64`                | when the publisher sent this batch — advances every flush, so the feed is visibly alive             |
-| `updates`    | `vector<Value\|Svi>` | the category's updates, each carrying its own `timestamp`; one signature covers them all            |
+| field        | type                                             | meaning                                                                                                                                                |
+| ------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `batch_kind` | `u8`                                             | `0`/`1`/`2`/`3` = value / svi / value-absolute / svi-absolute; each verify function asserts its own kind (no cross‑feeding by the relayer)             |
+| `timestamp`  | `u64`                                            | when the publisher sent this batch — advances every flush, so the feed is visibly alive; for the absolute kinds, also every update's only "as of" time |
+| `updates`    | `vector<Value\|Svi\|ValueAbsolute\|SviAbsolute>` | the category's updates — the non-absolute kinds each carrying their own `timestamp`; one signature covers them all                                     |
 
 A **value batch** (`verify_and_create_value_batch`) carries `ValueUpdate` structs; an **SVI batch**
-(`verify_and_create_svi_batch`) carries `SviUpdate`. Neither has a per‑update tag — the batch is all one
-category. The `sid` is a `u256` (the full BS hash) and `timestamp` a `u64`; the scaled
+(`verify_and_create_svi_batch`) carries `SviUpdate`. The **absolute** variants
+(`verify_and_create_value_absolute_batch` / `verify_and_create_svi_absolute_batch`) carry
+`ValueAbsoluteUpdate` / `SviAbsoluteUpdate` — the same fields minus `timestamp`, since every entry in
+one of these batches is as of the envelope `timestamp` alone. Neither has a per‑update tag — a batch is
+all one category. The `sid` is a `u256` (the full BS hash) and `timestamp` a `u64`; the scaled
 values are `u128`, at a fixed-point scale the signer and consumer agree off-chain — the
 contract stores them verbatim and never rescales:
 
-| update        | fields                                                                                                                                                                                            |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ValueUpdate` | `sid: u256`, `timestamp: u64`, `v`                                                                                                                                                                |
-| `SviUpdate`   | `sid: u256`, `timestamp: u64`, `svi_a_magnitude`, `svi_a_is_negative: bool`, `svi_b`, `svi_sigma`, `svi_rho_magnitude`, `svi_rho_is_negative: bool`, `svi_m_magnitude`, `svi_m_is_negative: bool` |
+| update                | fields                                                                                                                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ValueUpdate`         | `sid: u256`, `timestamp: u64`, `v`                                                                                                                                                                |
+| `SviUpdate`           | `sid: u256`, `timestamp: u64`, `svi_a_magnitude`, `svi_a_is_negative: bool`, `svi_b`, `svi_sigma`, `svi_rho_magnitude`, `svi_rho_is_negative: bool`, `svi_m_magnitude`, `svi_m_is_negative: bool` |
+| `ValueAbsoluteUpdate` | `sid: u256`, `v`                                                                                                                                                                                  |
+| `SviAbsoluteUpdate`   | `sid: u256`, `svi_a_magnitude`, `svi_a_is_negative: bool`, `svi_b`, `svi_sigma`, `svi_rho_magnitude`, `svi_rho_is_negative: bool`, `svi_m_magnitude`, `svi_m_is_negative: bool`                   |
 
 Updates are **carriers, not storage types**: the batch is a hot potato (no abilities, mintable only by
 `verify`, must be consumed in the same transaction), and the updates it yields are `copy, drop` but not
@@ -187,8 +201,8 @@ Prereqs: `sui` CLI (tested on 1.74.1; matches CI's `SUI_VERSION`), Node + `pnpm`
 
 ```bash
 # 1. Move unit tests — consumer logic + accessors, no network required
-(cd move/bs_oracle    && sui move test --gas-limit 100000000000)   # 8 pass
-(cd move/example_consumer && sui move test --gas-limit 100000000000)   # 13 tests
+(cd move/bs_oracle    && sui move test --gas-limit 100000000000)   # 10 pass
+(cd move/example_consumer && sui move test --gas-limit 100000000000)   # 16 tests
 
 # 2. Start a local Sui network (separate terminal; Clock = real wall-time)
 sui start --with-faucet --force-regenesis
@@ -196,7 +210,7 @@ sui start --with-faucet --force-regenesis
 # 3. TypeScript: signer unit tests + full live-signed localnet e2e
 cd ts
 pnpm install
-pnpm test                      # 23 tests (8 signer/encoding + 15 e2e)
+pnpm test                      # 27 tests (8 signer/encoding + 19 e2e)
 
 # 4. Manual one-shot demo
 pnpm publish-packages          # publishes both packages, sets signer, writes deployment.json
