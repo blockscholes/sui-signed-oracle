@@ -22,13 +22,12 @@ dist/
 # transient localnet deployment ids
 deployment.json
 
-# Move publish metadata — the CLI's own `--pubfile-path` output only ever holds
-# ephemeral test-publish ids, never a real deployment (`sui client publish` refuses
-# --pubfile-path outright); root-level published.toml is hand-maintained instead
-# and tracks real deployments, so it's exempted below.
-**/Published.toml
-**/Pub.*.toml
-!/published.toml
+# Move publish metadata — the CLI's own `--pubfile-path` output (only ever ephemeral
+# test-publish ids; `sui client publish` refuses --pubfile-path outright) always lands
+# inside a package directory. Scoped to move/*/ so it can't shadow the hand-maintained,
+# real-deployment published.toml at the repo root.
+move/*/Published.toml
+move/*/Pub.*.toml
 
 # read-only reference clone (do not vendor)
 reference/
