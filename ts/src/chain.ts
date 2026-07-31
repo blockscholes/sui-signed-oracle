@@ -6,7 +6,7 @@
 //   - the relayer: the atomic verify -> consumer PTB, plus devInspect reads.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -14,16 +14,17 @@ import { SuiClient } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
 import { Transaction, type TransactionArgument } from "@mysten/sui/transactions";
-import { RPC_URL, FAUCET_URL, TEST_SIGNER_PRIV } from "./config.js";
-import { compressedPubkey } from "./signer.js";
+import { RPC_URL, FAUCET_URL } from "./config.js";
 
 const CLOCK_ID = "0x6";
 /// Bound on AdminCap-gated calls (setSigner/setPaused) so a hung RPC surfaces as an
 /// error instead of blocking indefinitely — setPaused is the emergency-stop lever, so
 /// this matters most exactly when an operator is relying on it during an incident.
 const ADMIN_CALL_TIMEOUT_MS = 30_000;
-/// Gas budget for a package publish; the active address must hold at least this.
-const PUBLISH_GAS_BUDGET = 2_000_000_000n;
+/// Gas budget for a package publish; the active address must hold at least this in a
+/// single coin. Observed actual cost is ~0.03 SUI per package; this leaves ~10x margin
+/// without requiring an oversized single gas coin.
+const PUBLISH_GAS_BUDGET = 300_000_000n;
 /// Named environment Move.lock pins framework dependencies for (see both Move.toml
 /// files) — decoupled from the actual network we publish to (a real localnet), since
 /// `--build-env` only accepts a stable, known environment name.
@@ -95,6 +96,25 @@ export function exportActiveKeypair(): { keypair: Ed25519Keypair; address: strin
   return { keypair: Ed25519Keypair.fromSecretKey(bech32), address };
 }
 
+/// Point the CLI at testnet and the deployer identity, then export that key so the
+/// SDK signs with the same address the CLI publishes from. The `testnet` env must
+/// already exist in the CLI config, and must be an endpoint serving gRPC —
+/// `test-publish` needs it, and JSON-RPC-only endpoints fail with a missing
+/// grpc-status header.
+export function useTestnetDeployer(): { keypair: Ed25519Keypair; address: string } {
+  try {
+    sui(["client", "switch", "--env", "testnet"]);
+  } catch (err) {
+    throw new Error(
+      "no `testnet` env in the sui CLI config — add one pointing at a gRPC-capable fullnode " +
+        "(`sui client new-env --alias testnet --rpc <url>`)",
+      { cause: err },
+    );
+  }
+  sui(["client", "switch", "--address", TESTNET_DEPLOYER_ALIAS]);
+  return exportActiveKeypair();
+}
+
 export async function fundAddress(c: SuiClient, address: string, minBalance = 1n): Promise<void> {
   await requestSuiFromFaucetV2({ host: FAUCET_URL, recipient: address });
   for (let i = 0; i < 40; i++) {
@@ -124,6 +144,9 @@ export async function setupLocalnet(): Promise<{ client: SuiClient; keypair: Ed2
 // the original address across an upgrade lineage).
 export interface Deployment {
   bsPackageId: string;
+  /// bs_sid: a pure derivation library, scoped per call by `bsPackageId`, so it
+  /// depends on nothing and can be published in any order.
+  sidPackageId: string;
   examplePackageId: string;
   registryId: string;
   oracleId: string;
@@ -140,6 +163,10 @@ interface ObjectChange {
 const here = dirname(fileURLToPath(import.meta.url));
 const BS_PKG_PATH = resolve(here, "../../move/bs_oracle");
 const EXAMPLE_PKG_PATH = resolve(here, "../../move/example_consumer");
+const SID_PKG_PATH = resolve(here, "../../move/bs_sid");
+
+/// sui keystore alias that owns the testnet packages and their AdminCap.
+const TESTNET_DEPLOYER_ALIAS = process.env["SUI_DEPLOYER_ALIAS"] ?? "testnet-deployer";
 
 function requiredString(record: Record<string, unknown>, field: string): string {
   const value = record[field];
@@ -156,6 +183,7 @@ export function parseDeploymentJson(json: string): Deployment {
   }
   return {
     bsPackageId: requiredString(parsed, "bsPackageId"),
+    sidPackageId: requiredString(parsed, "sidPackageId"),
     examplePackageId: requiredString(parsed, "examplePackageId"),
     registryId: requiredString(parsed, "registryId"),
     oracleId: requiredString(parsed, "oracleId"),
@@ -195,26 +223,57 @@ function publishStatusForError(value: unknown): unknown {
   return effects["status"] ?? value;
 }
 
-/// `sui client publish` requires the active client env to have a matching Move.lock
-/// pin, which a `--force-regenesis` localnet never does (its chain id is different
-/// every run). `test-publish` decouples build-time dependency resolution
-/// (`--build-env`) from the network actually published to, at the cost of needing a
-/// shared `pubfilePath` so a dependent package (example_consumer on bs_oracle) can
-/// resolve the other's just-published address.
-function publishOne(path: string, pubfilePath: string): { packageId: string; created: ObjectChange[] } {
-  const out = sui([
-    "client",
-    "test-publish",
-    "--json",
-    "--skip-dependency-verification",
-    "--gas-budget",
-    String(PUBLISH_GAS_BUDGET),
-    "--build-env",
-    BUILD_ENV,
-    "--pubfile-path",
-    pubfilePath,
-    path,
-  ]);
+function activeEnv(): string {
+  return sui(["client", "active-env"]).trim();
+}
+
+/// `sui client publish` refuses a package that already records a publication for
+/// the active environment, and offers no force flag — the documented path is to
+/// drop that entry. Republishing is the intended flow here rather than an edge
+/// case: every oracle version is a brand-new package by design (design.md §5,
+/// never an in-place upgrade), so a fresh id is the point. Returns the id being
+/// replaced, so the caller can say what it just dropped; git history keeps the
+/// committed record either way.
+function clearPublication(pkgPath: string, env: string): string | undefined {
+  const file = join(pkgPath, "Published.toml");
+  if (!existsSync(file)) return undefined;
+  const lines = readFileSync(file, "utf8").split("\n");
+  const start = lines.findIndex((l) => l.trim() === `[published.${env}]`);
+  if (start === -1) return undefined;
+
+  let end = start + 1;
+  let previous: string | undefined;
+  while (end < lines.length && !lines[end]?.trimStart().startsWith("[")) {
+    const match = /^\s*published-at\s*=\s*"([^"]+)"/.exec(lines[end] ?? "");
+    if (match) previous = match[1];
+    end++;
+  }
+  lines.splice(start, end - start);
+  writeFileSync(file, `${lines.join("\n").trimEnd()}\n`);
+  return previous;
+}
+
+/// Where a publish is going, which decides the CLI verb.
+///
+/// A real network publish records `Published.toml` per package — the committed
+/// record of what is deployed where, and what a dependent resolves its
+/// dependencies from.
+///
+/// Localnet cannot use it: `sui client publish` requires the active env to have a
+/// matching Move.lock pin, which a `--force-regenesis` localnet never has (fresh
+/// chain id every run). `test-publish` decouples build-time dependency resolution
+/// (`--build-env`) from the network published to, at the cost of a shared
+/// `pubfilePath` for dependents to resolve through, and writes no Published.toml.
+type PublishTarget = { kind: "localnet"; pubfilePath: string } | { kind: "network" };
+
+function publishOne(path: string, target: PublishTarget): { packageId: string; created: ObjectChange[] } {
+  const verb = target.kind === "localnet" ? "test-publish" : "publish";
+  const args = ["client", verb, "--json", "--gas-budget", String(PUBLISH_GAS_BUDGET)];
+  if (target.kind === "localnet") {
+    args.push("--build-env", BUILD_ENV, "--pubfile-path", target.pubfilePath);
+  }
+  args.push(path);
+  const out = sui(args);
   const res: unknown = JSON.parse(out.slice(out.indexOf("{")));
   const changes = objectChangesFromPublishResult(res);
   const published = changes.find((c) => c.type === "published");
@@ -248,39 +307,66 @@ async function burnUpgradeCap(client: SuiClient, keypair: Ed25519Keypair, upgrad
 /// Publishes bs_oracle first, then example_consumer (which auto-links to the
 /// published bs_oracle via Move.lock), yielding two distinct package ids —
 /// keeping the verifier package separate from the consumer package. Burns
-/// bs_oracle's `UpgradeCap` immediately after publish (see `burnUpgradeCap`).
-export async function publishPackages(client: SuiClient, keypair: Ed25519Keypair): Promise<Deployment> {
-  const pubDir = mkdtempSync(join(tmpdir(), "bs-oracle-pub-"));
-  const pubfilePath = join(pubDir, "pubfile.toml");
+/// bs_oracle's `UpgradeCap` before either dependent is published, so no failure
+/// path can leave a published verifier upgradeable (see `burnUpgradeCap`).
+export async function publishPackages(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  mode: "localnet" | "network" = "localnet",
+): Promise<Deployment> {
+  const pubDir = mode === "localnet" ? mkdtempSync(join(tmpdir(), "bs-oracle-pub-")) : undefined;
+  const target: PublishTarget = pubDir
+    ? { kind: "localnet", pubfilePath: join(pubDir, "pubfile.toml") }
+    : { kind: "network" };
+  if (mode === "network") {
+    const env = activeEnv();
+    for (const [name, pkgPath] of [
+      ["bs_oracle", BS_PKG_PATH],
+      ["bs_sid", SID_PKG_PATH],
+      ["example_consumer", EXAMPLE_PKG_PATH],
+    ] as const) {
+      const previous = clearPublication(pkgPath, env);
+      if (previous) console.log(`replacing ${env} publication of ${name}: was ${previous}`);
+    }
+  }
   let bs: { packageId: string; created: ObjectChange[] };
+  let sid: { packageId: string; created: ObjectChange[] };
   let example: { packageId: string; created: ObjectChange[] };
   try {
-    bs = publishOne(BS_PKG_PATH, pubfilePath);
-    example = publishOne(EXAMPLE_PKG_PATH, pubfilePath);
+    bs = publishOne(BS_PKG_PATH, target);
+    // Burn before publishing anything else. A later failure would otherwise
+    // strand a verifier package that exists on chain — and whose id the
+    // publication files already record — with its UpgradeCap still live, which
+    // is precisely the state §5 rules out.
+    const bsUpgradeCapId = bs.created.find((c) => String(c.objectType).endsWith("::package::UpgradeCap"))?.objectId;
+    if (!bsUpgradeCapId) {
+      throw new Error(`bs_oracle published without a locatable UpgradeCap: ${JSON.stringify(bs.created)}`);
+    }
+    await burnUpgradeCap(client, keypair, bsUpgradeCapId);
+    sid = publishOne(SID_PKG_PATH, target);
+    example = publishOne(EXAMPLE_PKG_PATH, target);
   } finally {
-    rmSync(pubDir, { recursive: true, force: true });
+    if (pubDir) rmSync(pubDir, { recursive: true, force: true });
   }
   const registry = bs.created.find((c) => String(c.objectType).endsWith("::registry::SignerRegistry"));
   const adminCap = bs.created.find((c) => String(c.objectType).endsWith("::registry::AdminCap"));
-  const bsUpgradeCap = bs.created.find((c) => String(c.objectType).endsWith("::package::UpgradeCap"));
 
   const oracle = example.created.find((c) => String(c.objectType).endsWith("::oracle::ExampleOracle"));
 
-  if (!registry || !adminCap || !oracle || !bsUpgradeCap) {
+  if (!registry || !adminCap || !oracle) {
     throw new Error(
       `could not locate created objects.\nbs: ${JSON.stringify(bs.created)}\nexample: ${JSON.stringify(example.created)}`,
     );
   }
-  if (!registry.objectId || !adminCap.objectId || !oracle.objectId || !bsUpgradeCap.objectId) {
+  if (!registry.objectId || !adminCap.objectId || !oracle.objectId) {
     throw new Error(
       `created objects are missing ids.\nbs: ${JSON.stringify(bs.created)}\nexample: ${JSON.stringify(example.created)}`,
     );
   }
 
-  await burnUpgradeCap(client, keypair, bsUpgradeCap.objectId);
-
   return {
     bsPackageId: bs.packageId,
+    sidPackageId: sid.packageId,
     examplePackageId: example.packageId,
     registryId: registry.objectId,
     oracleId: oracle.objectId,
@@ -311,16 +397,17 @@ async function execAdminCall(
   await client.waitForTransaction({ digest: res.digest, timeout: ADMIN_CALL_TIMEOUT_MS });
 }
 
-export async function setSigner(client: SuiClient, keypair: Ed25519Keypair, dep: Deployment): Promise<void> {
+export async function setSigner(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  dep: Deployment,
+  signerPubkey: Uint8Array,
+): Promise<void> {
   return execAdminCall(
     client,
     keypair,
     `${dep.bsPackageId}::registry::set_signer`,
-    (tx) => [
-      tx.object(dep.registryId),
-      tx.object(dep.adminCapId),
-      tx.pure.vector("u8", Array.from(compressedPubkey(TEST_SIGNER_PRIV))),
-    ],
+    (tx) => [tx.object(dep.registryId), tx.object(dep.adminCapId), tx.pure.vector("u8", Array.from(signerPubkey))],
     "set_signer",
   );
 }
@@ -343,21 +430,16 @@ export async function setPaused(
 
 // === Relayer ===
 
-/// Which homogeneous batch a message carries — picks the verify + ingest pair. The
-/// "absolute" kinds carry no per-update timestamp (see `bs_oracle::verify`).
-export type BatchKind = "value" | "svi" | "value_absolute" | "svi_absolute";
+/// Which homogeneous batch a message carries — picks the verify + ingest pair.
+export type BatchKind = "value" | "svi";
 
 const VERIFY_FN: Record<BatchKind, string> = {
   value: "verify_and_create_value_batch",
   svi: "verify_and_create_svi_batch",
-  value_absolute: "verify_and_create_value_absolute_batch",
-  svi_absolute: "verify_and_create_svi_absolute_batch",
 };
 const INGEST_FN: Record<BatchKind, string> = {
   value: "ingest_value_batch",
   svi: "ingest_svi_batch",
-  value_absolute: "ingest_value_absolute_batch",
-  svi_absolute: "ingest_svi_absolute_batch",
 };
 
 export interface RelayResult {
@@ -440,6 +522,96 @@ async function readScalar(
   const rv = res.results?.[0]?.returnValues?.[0];
   if (!rv) throw new Error(`no return value for ${fn}: ${JSON.stringify(res.error ?? res)}`);
   return leToBigInt(rv[0]);
+}
+
+function requireSidPackage(dep: Deployment): void {
+  if (!dep.sidPackageId) {
+    throw new Error("no bs_sid package id in the deployment — run `pnpm publish-testnet` first");
+  }
+}
+
+/// Decode a `u256` returned by the `resultIndex`-th moveCall of a devInspect.
+async function devInspectU256(
+  client: SuiClient,
+  sender: string,
+  tx: Transaction,
+  resultIndex: number,
+): Promise<bigint> {
+  const res = await client.devInspectTransactionBlock({ sender, transactionBlock: tx });
+  const rv = res.results?.[resultIndex]?.returnValues?.[0];
+  if (!rv) throw new Error(`no return value at result ${resultIndex}: ${JSON.stringify(res.error ?? res)}`);
+  return leToBigInt(rv[0]);
+}
+
+/// Derive an expiryless `index.px` sid on-chain. Pure and read-only: no gas, no
+/// signing, no objects. `oraclePackageId` is the scope — the deployment the sid
+/// belongs to, which must be the id wsAPI resolves for this network. `index_px`
+/// bakes in the `blockscholes` exchange — index.px never serves `composite` —
+/// but takes `asset`, which a non-crypto underlying suffixes (`spot-equity`).
+export function deriveIndexPxSid(
+  client: SuiClient,
+  sender: string,
+  dep: Deployment,
+  asset: string,
+  baseAsset: string,
+  decimals: number,
+  timestampPrecision: string,
+): Promise<bigint> {
+  requireSidPackage(dep);
+  const tx = new Transaction();
+  // `Expiry` is a struct, so `Option<Expiry>` is not a pure type: even the
+  // absent case has to be produced by a call rather than serialised inline.
+  const expiry = tx.moveCall({
+    target: "0x1::option::none",
+    typeArguments: [`${dep.sidPackageId}::sid::Expiry`],
+  });
+  tx.moveCall({
+    target: `${dep.sidPackageId}::sid::index_px`,
+    arguments: [
+      tx.pure.address(dep.bsPackageId),
+      tx.pure.string(asset),
+      tx.pure.string(baseAsset),
+      expiry,
+      tx.pure.u8(decimals),
+      tx.pure.string(timestampPrecision),
+    ],
+  });
+  return devInspectU256(client, sender, tx, 1);
+}
+
+/// Derive a `model.params` composite sid on-chain for a constant-maturity tenor.
+/// Two chained moveCalls: `Expiry` is `copy, drop`, so the first call's result
+/// passes straight into the second.
+export function deriveModelParamsSid(
+  client: SuiClient,
+  sender: string,
+  dep: Deployment,
+  asset: string,
+  baseAsset: string,
+  model: string,
+  tenorMs: bigint,
+  decimals: number,
+  timestampPrecision: string,
+): Promise<bigint> {
+  requireSidPackage(dep);
+  const tx = new Transaction();
+  const expiry = tx.moveCall({
+    target: `${dep.sidPackageId}::sid::expiry_tenor`,
+    arguments: [tx.pure.u64(tenorMs)],
+  });
+  tx.moveCall({
+    target: `${dep.sidPackageId}::sid::model_params`,
+    arguments: [
+      tx.pure.address(dep.bsPackageId),
+      tx.pure.string(asset),
+      tx.pure.string(baseAsset),
+      tx.pure.string(model),
+      expiry,
+      tx.pure.u8(decimals),
+      tx.pure.string(timestampPrecision),
+    ],
+  });
+  return devInspectU256(client, sender, tx, 1);
 }
 
 /// Read the stored value (today: spot or forward price) for a `sid` via devInspect.

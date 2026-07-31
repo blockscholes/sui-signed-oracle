@@ -1,0 +1,18 @@
+[package]
+name = "bs_sid"
+edition = "2024"
+version = "0.0.1"
+
+# Same framework pin as bs_oracle so both build against one revision.
+#
+# No bs_oracle dependency and no baked deployment address: the caller passes
+# the oracle package id its sids belong to, so one published copy of this
+# library serves every deployment and every oracle version. Nothing here
+# depends on retaining the UpgradeCap.
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+MoveStdlib = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+
+[addresses]
+bs_sid = "0x0"

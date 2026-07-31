@@ -18,8 +18,8 @@ client subscribes → each series gets an immutable sid → BS signs a homogeneo
    item identifies a feed (`feed`/`asset`/`base_asset`/`model`/`expiry`/…) and carries an **immutable
    `sid`**. Unlike the standard wsAPI (where `sid` is client-supplied), the signed-oracle flow makes it
    **optional**: the client may supply a pre-assigned `sid` string, or omit it — in which case Block
-   Scholes generates one as a deterministic hash of all the request item's fields — and returns the
-   resolved `sid` in the subscription confirmation (see [Subscription & sid](#subscription--sid)).
+   Scholes generates one as a deterministic encoding of the request item's identity fields — and returns
+   the resolved `sid` in the subscription confirmation (see [Subscription & sid](#subscription--sid)).
 2. **Sign.** Block Scholes produces the data as a self-contained **value object** and signs its
    canonical bytes with **one** secp256k1 signature over the whole batch (see §2). A batch is
    **homogeneous by category** — a value or SVI batch — and each entry is a minimal
@@ -54,8 +54,8 @@ client subscribes → each series gets an immutable sid → BS signs a homogeneo
 ### Subscription & sid
 
 A client opens a subscription describing the feeds it wants. Each batch item may carry a pre-assigned
-`sid` string; if no `sid` is present, Block Scholes generates one by hashing all of the request item's
-fields. In every case Block Scholes returns the resolved `sid` string in the **subscription
+`sid` string; if no `sid` is present, Block Scholes generates one from the request item's identity
+fields (junk keys do not participate). In every case Block Scholes returns the resolved `sid` string in the **subscription
 confirmation**, so the client always learns the final `sid` for each item. The rest of this section
 describes the `sid` **Block Scholes generates** (when the client omits one) and how we intend clients to
 consume it; a client that supplies its own `sid` owns the same guarantees itself.
@@ -64,14 +64,19 @@ consume it; a client that supplies its own `sid` owns the same guarantees itself
 the only thing binding an on-chain `{sid, value}` to a real-world meaning: the verifier proves the bytes
 are authentically signed but never interprets them. Two consequences:
 
-- **It fully specifies the value's meaning.** Block Scholes derives the `sid` from the feed's
-  fully-qualified name, which encodes every value-affecting property — provider/exchange, asset,
-  base/quote, model, expiry, frequency, datatype, and **scale/decimals**. BS stores the `sid ↔ format`
-  binding, so a config change (e.g. different `decimals`) gets a **fresh** `sid` and a `sid` never
-  changes meaning. Receiving `{sid, value}` therefore tells the consumer exactly how to interpret the
-  value. The hash also folds in the **signing domain** — `network`/`pkg_ver` for SUI, the EIP-712
-  domain for EVM — so subscribing the same feed under a different `pkg_ver` or network yields a
-  **different** `sid` (see the version-upgrade note in §5).
+- **It fully specifies the value's meaning.** The `sid` is derived from a structured, versioned binary
+  encoding of the request's identity fields — provider/exchange, asset, base/quote, model, expiry, and
+  **decimals and timestamp precision** — never a hash of the raw request or of the feed's display name
+  (see [Preimage](#preimage) below). BS stores the `sid ↔ format` binding, so a config change (e.g.
+  different `decimals`) gets a **fresh** `sid` and a `sid` never changes meaning. Equivalent spellings of
+  one series (tenor forms, decimal strikes, an explicit default vs. omitting the field) collapse onto the
+  same `sid`. Strings the qn layer routes on — base asset, exchange, the `realized.vol` lookback — are
+  instead encoded **exactly as sent**, case included, because two spellings reach two different upstream
+  feeds and must not share one on-chain key. The derivation is additionally scoped to the **deployment**
+  — the verifying package's id, which `domain.network` and `pkg_ver` resolve — so the same feed signed
+  for a different network or deployment version yields a **different** `sid` (see the version-upgrade
+  note in §5).
+  Receiving `{sid, value}` therefore tells the consumer exactly how to interpret the value.
 - **The client can use it as an integrity check on its own side.** Because the `sid` is a deterministic
   commitment to the config, the Predict consumer can reconstruct it from the config of the slot it is
   about to write to and confirm it matches the incoming `sid` before storing — catching **client-side**
@@ -79,17 +84,19 @@ are authentically signed but never interprets them. Two consequences:
   converting to its on-chain form. The data from BS is already correct and fully specified; this guards
   the consumer's handling of it.
 
-**(a) Subscribe request** — no `sid` supplied, so BS generates one by hashing all of the request
-item's fields.
+**(a) Subscribe request** — no `sid` supplied, so BS generates one from the request item's identity
+fields (see [Preimage](#preimage)).
 
 The `options.signature` object controls the signature scheme, and **the data is signed only when it is
 present** in the subscription — omit `signature` and the data is streamed **unsigned** (the existing wsAPI
 behaviour). When `signature` is present, `type` defaults to `"EVM"`; clients receiving Sui-verified
-batches set `type: "SUI"`. In the SUI case: `domain.pkg_ver` selects which verifying-package version Block
-Scholes signs for (`1` by default) — a purely off-chain lookup key Block Scholes uses to pick the
-target package/registry (see §5); it is never itself part of the signed bytes. `signature_schema`
-selects the signing algorithm (`"ecdsa"` by default; `"ed25519"` will be supported in future);
-`domain.network` pins the network (`"mainnet"` by default).
+batches set `type: "SUI"`. In the SUI case: `pkg_ver` selects which verifying-package version Block
+Scholes signs for (`1` by default) — an off-chain lookup key used to pick the target package/registry
+(see §5). It is not carried inside the signed batch bytes; the package id it resolves to is what
+scopes the preimage (see [Preimage](#preimage)), so it selects the sid namespace too.
+`signature_schema` selects the signing algorithm (`"ecdsa"` by default; `"ed25519"` will be supported in
+future); `domain.network` pins the network (`"mainnet"` by default) — not hashed itself, but it resolves
+which package id scopes the preimage, so two networks still derive different sids.
 
 Choosing `type: "SUI"` also fixes the **value encoding**: because Move has no signed or
 floating-point type, every number is a fixed-point integer at the client's chosen `decimals`
@@ -125,10 +132,10 @@ unchanged — normal signed decimals.
         },
         "signature": {
           "type": "SUI",
+          "pkg_ver": 1,
           "signature_schema": "ecdsa",
           "domain": {
-            "network": "mainnet",
-            "pkg_ver": 1
+            "network": "mainnet"
           }
         }
       }
@@ -166,10 +173,10 @@ unchanged — normal signed decimals.
           },
           "signature": {
             "type": "SUI",
+            "pkg_ver": 1,
             "signature_schema": "ecdsa",
             "domain": {
-              "network": "mainnet",
-              "pkg_ver": 1
+              "network": "mainnet"
             }
           }
         }
@@ -229,6 +236,60 @@ the EVM recovery id (`0x1b`/`0x1c`). The relayer packs this into the on-chain wi
 normalizing `v` to Sui's `{0, 1}`. The
 verification package takes this **signed value object** and returns the **verified value object** — that
 reconstructed canonical payload is exactly the on-chain payload decoded in §2.
+
+#### Preimage
+
+The Sui-signed path's `sid` is `keccak256` of a structured, versioned byte layout implemented once in
+`bs_sid::sid` (Move) and mirrored by an executable reference
+(`ts/src/generate_sid_vectors.ts`, run with `pnpm -C ts generate-vectors`); the pinned request → `sid`
+vectors are `move/bs_sid/vectors.json`, exercised by `move/bs_sid/tests/sid_tests.move`, held to the
+committed file by `ts/src/generate_sid_vectors.test.ts`, and reproduced byte-for-byte by the wsAPI
+implementation. A change to the layout without regenerating and re-pinning both sides is a
+coordinated break with the provider, never a local edit.
+
+```text
+preimage = scope | feed | body
+sid      = keccak256(preimage), read big-endian into u256
+```
+
+- `scope` = `package_id(32 raw)` — the deployment's identity. The package id is
+  **`bs_oracle`'s** — the contract that verifies, stores and serves the values, *not* `bs_sid`, which
+  only computes the digest. A feed key belongs to the deployment that holds it; the EVM families scope
+  by their EIP-712 `verifying_contract` for exactly the same reason. Scoping by `bs_sid` would instead
+  have namespaced keys by which helper hashed them and split a deployment's keys in two the day that
+  helper was republished. The caller supplies it — a consumer passes the id of the very oracle it
+  verifies against — so one published `bs_sid` stays correct for every deployment and every oracle
+  version. The oracle is immutable (§4: its `UpgradeCap` is burned), so
+  within one version the id cannot move, and a **new** oracle version is a new package and
+  deliberately a new `sid` namespace, shipping as a fresh `bs_sid` build (§5). Neither the network nor
+  `pkg_ver` is hashed: both are off-chain lookup keys that resolve *which* id scopes the preimage, and
+  distinct chains and versions already carry distinct ids (see (a) above).
+- `feed` is a BCS-encoded string supplied by the derive function (`index_px`, `mark_px`,
+  `model_params`, `settlement_px` in `bs_sid::sid`, each taking the kind's identity fields and
+  returning the `sid` in one call; each has an `*_generic` form spelling out the fields the short
+  one defaults) — never caller-supplied, so a request cannot name a feed that contradicts the
+  descriptor it derives. `asset` is a parameter of every form, short or generic: asset classes carry
+  a suffix for a non-crypto underlying (`spot-equity`, `future-equity`, `option-equity`), so pinning
+  one inside a convenience function would put those series out of reach.
+- `body` is the feed kind's descriptor struct, BCS-encoded, identity fields in pinned order and
+  `decimals`/`timestamp_precision` last. Absent `Option` fields still emit their `0x00` tag — BCS is
+  positional, so dropping one would shift every later field. **Timestamp precision is signed identity**:
+  a surface at two precisions is two different series, since the payload's `u64` timestamps mean nothing
+  without their unit.
+
+Byte-annotated example (`model.params`, SVI, HYPE, composite, an absolute expiry, testnet,
+unpublished placeholder package id):
+
+```text
+1111111111111111111111111111111111111111111111111111111111111111  package id (placeholder 0x11*32)
+0c6d6f64656c2e706172616d73                    feed = BCS "model.params"
+066f7074696f6e09636f6d706f736974650448595045035356490080613da99f01000009026d73  body (descriptor BCS, closed by decimals | timestamp_precision)
+```
+
+sid = `0x29f876378481972bf272eddcbb987579ec3a75a634533295c3c8c2cbfe548a6a`
+
+The full pinned vector set — every feed kind, the equivalence groups that must collapse onto one `sid`,
+and the disjointness checks that must not — lives in `move/bs_sid/vectors.json`.
 
 ---
 
@@ -537,7 +598,7 @@ actually constructs one — making the `UpgradeCap` holder a total-forgery singl
 ## 5. Package versioning & upgrades
 
 `pkg_ver` is an **off-chain lookup key**, not an on-chain field: a client requesting
-`options.signature.domain.pkg_ver: N` tells Block Scholes which verifying-package version to sign for. A new
+`options.signature.pkg_ver: N` tells Block Scholes which verifying-package version to sign for. A new
 data type or feed is a `verify.move` change (new `*Update` + `batch_kind` + `verify_and_create_*_batch`,
 or a struct change), so Block Scholes **publishes a brand-new package** — its own package id *and* its
 own `SignerRegistry`. Block Scholes keeps an off-chain `pkg_ver → { package_id, registry_id }` map;
@@ -553,10 +614,10 @@ checked by `package_id_M`'s own code (§2.4) — every other version's `ecrecove
 even though every version's registry shares the same signer key: nothing about the key distinguishes
 versions, the address prefix does. Existing v1 integrations keep working unchanged.
 
-**Client upgrade (v1 → v2):** request `pkg_ver: 2` (`options.signature.domain.pkg_ver`), repoint the
+**Client upgrade (v1 → v2):** request `pkg_ver: 2` (`options.signature.pkg_ver`), repoint the
 Move.toml dependency at `package_id_2`, reference its `SignerRegistry` object / call
-`package_id_2::verify::…` in the PTB, then redeploy. Because `pkg_ver` is folded into the `sid` hash
-(see [Subscription & sid](#subscription--sid)), this upgrade mints a **new** `sid` for every affected
+`package_id_2::verify::…` in the PTB, then redeploy. Because that version's package id is folded into
+the `sid` scope (see [Subscription & sid](#subscription--sid)), this upgrade mints a **new** `sid` for every affected
 feed — the client must pick up the newly resolved v2 sids rather than reusing the v1 ones.
 
 In-place Sui upgrades keep one registry but split the client across two ids (type-origin vs.

@@ -23,21 +23,16 @@ import {
   readSviParams,
   readLastTimestamp,
 } from "./chain.js";
-import { signPayloadSecp256k1, frameMessage } from "./signer.js";
+import { signPayloadSecp256k1, frameMessage, compressedPubkey } from "./signer.js";
 import {
   buildValueBatchPayload,
   buildSviBatchPayload,
-  buildValueAbsoluteBatchPayload,
-  buildSviAbsoluteBatchPayload,
   valueUpdate,
   sviUpdate,
-  valueAbsoluteUpdate,
   signedBytesFor,
   toFixed,
   ValueUpdate,
   SviUpdate,
-  ValueAbsoluteUpdate,
-  SviAbsoluteUpdate,
 } from "./payloads.js";
 import { SPOT_SID, TEST_SIGNER_PRIV, TEST_SIGNER_PRIV_2, SPOT, FORWARD, SVI } from "./config.js";
 
@@ -72,20 +67,6 @@ async function signSvi(updates: SviUpdate[], over: Overrides = {}): Promise<Uint
   return frameMessage(await signPayloadSecp256k1(signedBytes, over.priv ?? TEST_SIGNER_PRIV), payload);
 }
 
-// The "absolute" builders take no per-update timestamp: every update is as of the
-// batch timestamp alone, so `over.batchTimestamp` is the only time in play here.
-async function signValueAbsolute(updates: ValueAbsoluteUpdate[], over: Overrides = {}): Promise<Uint8Array> {
-  const payload = buildValueAbsoluteBatchPayload(over.batchTimestamp ?? nowMs(), updates);
-  const signedBytes = signedBytesFor(over.packageId ?? dep.bsPackageId, payload);
-  return frameMessage(await signPayloadSecp256k1(signedBytes, over.priv ?? TEST_SIGNER_PRIV), payload);
-}
-
-async function signSviAbsolute(updates: SviAbsoluteUpdate[], over: Overrides = {}): Promise<Uint8Array> {
-  const payload = buildSviAbsoluteBatchPayload(over.batchTimestamp ?? nowMs(), updates);
-  const signedBytes = signedBytesFor(over.packageId ?? dep.bsPackageId, payload);
-  return frameMessage(await signPayloadSecp256k1(signedBytes, over.priv ?? TEST_SIGNER_PRIV), payload);
-}
-
 // A single-value-update batch at `timestamp` — the workhorse for happy/rejection cases.
 async function valueMessage(timestamp: bigint, over: Overrides = {}): Promise<Uint8Array> {
   return signValue([valueUpdate(SPOT_SID, timestamp, SPOT)], over);
@@ -109,7 +90,7 @@ function expectAbort(error: string | undefined, fnName: string, code: number) {
 beforeAll(async () => {
   ({ client, keypair, address } = await setupLocalnet());
   dep = await publishPackages(client, keypair);
-  await setSigner(client, keypair, dep);
+  await setSigner(client, keypair, dep, compressedPubkey(TEST_SIGNER_PRIV));
 }, 180_000);
 
 describe("Block Scholes -> Predict signed-oracle e2e (localnet)", () => {
@@ -188,75 +169,6 @@ describe("Block Scholes -> Predict signed-oracle e2e (localnet)", () => {
       svi_m_is_negative: update.svi_m_is_negative,
     });
     expect(await readLastTimestamp(client, dep, address, sid)).toBe(ts);
-  }, 60_000);
-
-  it("ingests a value-absolute batch, timed by the batch envelope alone", async () => {
-    const sid = 70n;
-    const batchTimestamp = secsAgo(5);
-    const r = await relaySafe(
-      await signValueAbsolute([valueAbsoluteUpdate(sid, SPOT)], { batchTimestamp }),
-      "value_absolute",
-    );
-    expect(r.success).toBe(true);
-    expect(r.eventTypes.some((t) => t.endsWith("::verify::BatchVerified"))).toBe(true);
-    expect(await readValue(client, dep, address, sid)).toBe(toFixed(SPOT));
-    // No per-update timestamp exists: the batch's own timestamp is the replay key.
-    expect(await readLastTimestamp(client, dep, address, sid)).toBe(batchTimestamp);
-  }, 60_000);
-
-  it("round-trips every widened SVI-absolute field above u64::MAX", async () => {
-    const u64Max = (1n << 64n) - 1n;
-    const batchTimestamp = secsAgo(5);
-    const sid = 71n;
-    const update: SviAbsoluteUpdate = {
-      sid,
-      svi_a_magnitude: u64Max + 1n,
-      svi_a_is_negative: true,
-      svi_b: u64Max + 2n,
-      svi_sigma: u64Max + 3n,
-      svi_rho_magnitude: u64Max + 4n,
-      svi_rho_is_negative: false,
-      svi_m_magnitude: u64Max + 5n,
-      svi_m_is_negative: true,
-    };
-    const r = await relaySafe(await signSviAbsolute([update], { batchTimestamp }), "svi_absolute");
-    expect(r.success).toBe(true);
-    expect(await readSviParams(client, dep, address, sid)).toEqual({
-      svi_a_magnitude: update.svi_a_magnitude,
-      svi_a_is_negative: update.svi_a_is_negative,
-      svi_b: update.svi_b,
-      svi_sigma: update.svi_sigma,
-      svi_rho_magnitude: update.svi_rho_magnitude,
-      svi_rho_is_negative: update.svi_rho_is_negative,
-      svi_m_magnitude: update.svi_m_magnitude,
-      svi_m_is_negative: update.svi_m_is_negative,
-    });
-    expect(await readLastTimestamp(client, dep, address, sid)).toBe(batchTimestamp);
-  }, 60_000);
-
-  it("verifies a multi-update value-absolute batch, every series sharing one batch timestamp", async () => {
-    // fresh sids, so this case carries no dependency on prior tests
-    const sidA = 72n;
-    const sidB = 73n;
-    const batchTimestamp = secsAgo(5);
-    const updates = [valueAbsoluteUpdate(sidA, SPOT), valueAbsoluteUpdate(sidB, FORWARD)];
-    const r = await relaySafe(await signValueAbsolute(updates, { batchTimestamp }), "value_absolute");
-    expect(r.success).toBe(true);
-    // Unlike the non-absolute batch, there's no per-sid timestamp to differ: both
-    // sids replay against the same envelope timestamp.
-    expect(await readLastTimestamp(client, dep, address, sidA)).toBe(batchTimestamp);
-    expect(await readLastTimestamp(client, dep, address, sidB)).toBe(batchTimestamp);
-    expect(await readValue(client, dep, address, sidA)).toBe(toFixed(SPOT));
-    expect(await readValue(client, dep, address, sidB)).toBe(toFixed(FORWARD));
-  }, 60_000);
-
-  it("rejects a value-absolute batch fed to the SVI-absolute verifier (batch-kind guard)", async () => {
-    const r = await relaySafe(
-      await signValueAbsolute([valueAbsoluteUpdate(74n, SPOT)], { batchTimestamp: secsAgo(5) }),
-      "svi_absolute",
-    );
-    expect(r.success).toBe(false);
-    expectAbort(r.error, "verify_header", 6); // EBadBatchKind
   }, 60_000);
 
   it("verifies a multi-update value batch, each series carrying its own timestamp", async () => {

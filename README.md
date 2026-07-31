@@ -114,7 +114,10 @@ sui-signed-oracle/
 │       ├── signer.ts                      # secp256k1 keys + recoverable sign; {r,s,v}; frameMessage packs the 65-byte wire
 │       ├── payloads.ts                    # BCS schema + payload builder + fixed-point / signed SVI encoding + hex utils
 │       ├── chain.ts                       # localnet plumbing + publish/set-signer + verify->consumer PTB relay + devInspect reads
-│       ├── cli.ts                         # CLI entry: publish | set-signer | relay subcommands
+│       ├── cli.ts                         # CLI entry: publish | set-signer | relay | staging-relay subcommands
+│       ├── wsapi_client.ts                 # staging wsAPI client (JSON-RPC over websocket) for the signed-batch stream
+│       ├── wire_convert.ts                 # wsAPI batch JSON -> the BCS input shapes payloads.ts re-encodes
+│       ├── testnet.ts                      # pinned testnet deployment ids + faucet setup
 │       └── signer.test.ts / e2e.test.ts   # vitest (unit + localnet e2e)
 └── reference/deepbookv3/                  # READ-ONLY clone of MystenLabs/deepbookv3 @ main (not built)
 ```

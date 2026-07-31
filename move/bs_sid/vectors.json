@@ -1,0 +1,1199 @@
+{
+  "scope": {
+    "package_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "pkg_ver": 1
+  },
+  "network_lookup": "testnet",
+  "feeds": [
+    "butterfly.iv",
+    "delta.iv",
+    "impact.ask.diff.twap.px",
+    "impact.bid.diff.twap.px",
+    "index.iv",
+    "index.px",
+    "interest.rate",
+    "mark.px",
+    "mid.diff.twap.px",
+    "model.params",
+    "moneyness.iv",
+    "realized.vol",
+    "risk-reversal.iv",
+    "settlement.px",
+    "skew.iv",
+    "strike.iv"
+  ],
+  "move_kinds": [
+    "index.px",
+    "mark.px",
+    "model.params",
+    "settlement.px"
+  ],
+  "vectors": [
+    {
+      "name": "index_px_basic",
+      "feed": "index.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "index.px",
+            "asset": "spot",
+            "base_asset": "HYPE",
+            "quote_asset": "USD",
+            "exchange": "composite"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111108696e6465782e70780473706f7409636f6d706f7369746504485950450355534400000009026d73",
+      "sid": "0x087887a7b41642e5385d647cbf0d3a726c95d2696db16e461364d91ce5a0ef55",
+      "note": ""
+    },
+    {
+      "name": "index_px_reference",
+      "feed": "index.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "index.px",
+            "asset": "spot",
+            "base_asset": "LBTC",
+            "exchange": "blockscholes",
+            "index_type": "reference"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111108696e6465782e70780473706f740c626c6f636b7363686f6c6573044c4254430355534401097265666572656e6365000009026d73",
+      "sid": "0x4d9ca0b9e55650ad92bffb4cd259c4cdb2d2a5546c02ec6acc73cc5f2eeee2d5",
+      "note": "index_type selects a different served price -> different series"
+    },
+    {
+      "name": "index_px_spread",
+      "feed": "index.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "index.px",
+            "base_asset": "BTC",
+            "index_spread": true
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111108696e6465782e70780473706f740c626c6f636b7363686f6c6573034254430355534400010009026d73",
+      "sid": "0xe97408d790bd4550734f84c9d6ef2cd88a667b702f88859d0d905621d7656185",
+      "note": "index_spread selects a different served price; the only vector pinning the BCS bool's TRUE byte (0x01) \u2014 every other vector encodes it false. asset/exchange/quote_asset are omitted, so it also pins that the defaults resolve to spot/blockscholes/USD"
+    },
+    {
+      "name": "index_px_future",
+      "feed": "index.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "index.px",
+            "asset": "future",
+            "base_asset": "HYPE",
+            "exchange": "blockscholes",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111108696e6465782e7078066675747572650c626c6f636b7363686f6c65730448595045035553440000010080613da99f01000009026d73",
+      "sid": "0xa932a97048234543ae0b73f3a42a605e754ac77ea2dbf3154358c2476f4c822e",
+      "note": "a dated futures index: the expiry is in the served qn, so two expiries are two series"
+    },
+    {
+      "name": "index_px_future_tenor",
+      "feed": "index.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "index.px",
+            "asset": "future",
+            "base_asset": "HYPE",
+            "exchange": "blockscholes",
+            "expiry": "30d"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111108696e6465782e7078066675747572650c626c6f636b7363686f6c65730448595045035553440000010100c87e9a0000000009026d73",
+      "sid": "0x63c45b292b35c00616fd6d8b55b80f6f5fa748bb14c69bca0f6c77a1c786ecc0",
+      "note": "a rolling constant-maturity futures index: a tenor expiry, distinct from any absolute one"
+    },
+    {
+      "name": "index_px_spot_equity",
+      "feed": "index.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "index.px",
+            "asset": "spot-equity",
+            "base_asset": "HYPE",
+            "exchange": "blockscholes"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111108696e6465782e70780b73706f742d6571756974790c626c6f636b7363686f6c657304485950450355534400000009026d73",
+      "sid": "0xa15f5d59dc91b2c73201c12e8b6490e4ae719bb4e8e3a4f9383e7206a72acd4d",
+      "note": "a non-crypto underlying suffixes its asset class: spot-equity is a different series from spot"
+    },
+    {
+      "name": "mark_px_future",
+      "feed": "mark.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "mark.px",
+            "asset": "future",
+            "base_asset": "HYPE",
+            "exchange": "composite",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111076d61726b2e70780666757475726509636f6d706f73697465044859504503555344010080613da99f010000000000000009026d73",
+      "sid": "0x767852094662e0763fdfb8cc02f08969892b2d083159df16cb91ccb6505e3cd6",
+      "note": "every absent Option is one 0x00 byte, never omitted"
+    },
+    {
+      "name": "mark_px_future_tenor",
+      "feed": "mark.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "mark.px",
+            "asset": "future",
+            "base_asset": "HYPE",
+            "exchange": "composite",
+            "expiry": "30d"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111076d61726b2e70780666757475726509636f6d706f73697465044859504503555344010100c87e9a00000000000000000009026d73",
+      "sid": "0x619bdb1ce815f1520fd76398018024515fc5e9c652d60be893c936a80519fc8e",
+      "note": "mark.px is not always an iso expiry either: a constant-maturity ('30d') mark is a tenor sid"
+    },
+    {
+      "name": "mark_px_future_equity",
+      "feed": "mark.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "mark.px",
+            "asset": "future-equity",
+            "base_asset": "HYPE",
+            "exchange": "composite",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111076d61726b2e70780d6675747572652d65717569747909636f6d706f73697465044859504503555344010080613da99f010000000000000009026d73",
+      "sid": "0xe8b762be292336c60f3d92bb14ad5a75c99f1e55dba7c69c2d7f1bd17cfb8fa5",
+      "note": "the same suffix on a mark: future-equity and future are two series"
+    },
+    {
+      "name": "mark_px_perpetual",
+      "feed": "mark.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "mark.px",
+            "asset": "perpetual",
+            "base_asset": "HYPE",
+            "exchange": "blockscholes"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111076d61726b2e70780970657270657475616c0c626c6f636b7363686f6c657304485950450355534400000000000009026d73",
+      "sid": "0x8320d1bd10f808f939c234e27f8cdb3905c4811fe2622424a3ecdd490f57b87e",
+      "note": ""
+    },
+    {
+      "name": "mark_px_option",
+      "feed": "mark.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "mark.px",
+            "asset": "option",
+            "base_asset": "HYPE",
+            "exchange": "deribit",
+            "expiry": "2026-07-28T15:00:00Z",
+            "strike": 42.5,
+            "type": "C",
+            "greeks": [
+              "delta",
+              "vega"
+            ]
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111076d61726b2e7078066f7074696f6e0764657269626974044859504503555344010080613da99f010000010100008932e509000000000000000000000000000001014301020564656c7461047665676109026d73",
+      "sid": "0xbd9d049995595ca20c98d3bf3bb153a5c2bf0a4615509a03c9b74450039b56b8",
+      "note": "not SUI-signable today (option mark is not a scalar); pinned so a future promotion cannot move ids"
+    },
+    {
+      "name": "mark_px_option_atm",
+      "feed": "mark.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "mark.px",
+            "asset": "option",
+            "base_asset": "HYPE",
+            "exchange": "deribit",
+            "expiry": "2026-07-28T15:00:00Z",
+            "strike": "atm_forward",
+            "type": "C"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111076d61726b2e7078066f7074696f6e0764657269626974044859504503555344010080613da99f010000010101000000000000000000000000000000000b61746d5f666f727761726400000101430009026d73",
+      "sid": "0xda87ca5cc16a95043ed09030f22ce8860dda63bc837038cbb93158f699d9bbb1",
+      "note": "a named strike is a different instrument from any number"
+    },
+    {
+      "name": "model_params_svi",
+      "feed": "model.params",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "model.params",
+            "asset": "option",
+            "exchange": "composite",
+            "base_asset": "HYPE",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c6d6f64656c2e706172616d73066f7074696f6e09636f6d706f736974650448595045035356490080613da99f01000009026d73",
+      "sid": "0x29f876378481972bf272eddcbb987579ec3a75a634533295c3c8c2cbfe548a6a",
+      "note": "asset/exchange defaulted; explicit spelling is byte-identical"
+    },
+    {
+      "name": "model_params_asset_override",
+      "feed": "model.params",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "model.params",
+            "asset": "option-equity",
+            "exchange": "composite",
+            "base_asset": "HYPE",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c6d6f64656c2e706172616d730d6f7074696f6e2d65717569747909636f6d706f736974650448595045035356490080613da99f01000009026d73",
+      "sid": "0x93fe2e645bbc214eb6d90fe8b1e8fe54c43ac6696a6a91e283ad52fd9c5c5d9a",
+      "note": "asset branches the surface (e.g. RWA option-equity): a non-default asset is a different series"
+    },
+    {
+      "name": "model_params_tenor",
+      "feed": "model.params",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "model.params",
+            "base_asset": "HYPE",
+            "model": "SVI",
+            "expiry": "30d"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c6d6f64656c2e706172616d73066f7074696f6e09636f6d706f736974650448595045035356490100c87e9a0000000009026d73",
+      "sid": "0xc248b2a85721bc2e5d00b1dda8baa96d7f2a0270f111d5a511f2aa03b07bddae",
+      "note": "tenor: 2592000000 ms behind discriminant 0x01; does not roll"
+    },
+    {
+      "name": "model_params_decimals_5",
+      "feed": "model.params",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "model.params",
+            "base_asset": "HYPE",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 5
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c6d6f64656c2e706172616d73066f7074696f6e09636f6d706f736974650448595045035356490080613da99f01000005026d73",
+      "sid": "0x0d96e85ca50a4d31530575202d1d0e6c2f5738531163248c20d5c6335fd22a68",
+      "note": "scale is identity: a provider rescale lands in a new slot"
+    },
+    {
+      "name": "mark_px_option_decimals_5",
+      "feed": "mark.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "mark.px",
+            "asset": "option",
+            "base_asset": "HYPE",
+            "exchange": "deribit",
+            "expiry": "2026-07-28T15:00:00Z",
+            "strike": 42.5,
+            "type": "C",
+            "greeks": [
+              "delta",
+              "vega"
+            ]
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 5
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111076d61726b2e7078066f7074696f6e0764657269626974044859504503555344010080613da99f01000001010090d9400000000000000000000000000000000001014301020564656c7461047665676105026d73",
+      "sid": "0xfe47cdb2a4ba151772e344147c9202a8eb30e241ebce1c04dfb5282563f19d14",
+      "note": "identity numbers scale at format.decimals: the strike bytes AND the trailing decimals byte both differ from mark_px_option"
+    },
+    {
+      "name": "model_params_second_precision",
+      "feed": "model.params",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "model.params",
+            "base_asset": "HYPE",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "s",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c6d6f64656c2e706172616d73066f7074696f6e09636f6d706f736974650448595045035356490080613da99f010000090173",
+      "sid": "0x68c29e470e07e248ed8f7a9f82f8000ab6af07e70796d5a45c0d0b8616b2b6b9",
+      "note": "timestamp precision is signed identity: the same surface at second-precision timestamps is its own series"
+    },
+    {
+      "name": "settlement_px",
+      "feed": "settlement.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "settlement.px",
+            "base_asset": "HYPE",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110d736574746c656d656e742e707809636f6d706f7369746504485950450080613da99f01000009026d73",
+      "sid": "0xb0f36a4bf705d213886362a7b1b238c155a0d3ef946ac30771db5bffa85d0ae7",
+      "note": "exchange defaults to composite; tenor expiry is rejected"
+    },
+    {
+      "name": "index_iv",
+      "feed": "index.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "index.iv",
+            "base_asset": "BTC",
+            "expiry": "30d"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111108696e6465782e697609636f6d706f73697465034254430100c87e9a0000000009026d73",
+      "sid": "0x36d5a3bb2f949218f6edd3c22f5833d2406627221579bdc9e257a6ecde8759a1",
+      "note": ""
+    },
+    {
+      "name": "realized_vol",
+      "feed": "realized.vol",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "realized.vol",
+            "base_asset": "BTC",
+            "lookback": "30d"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c7265616c697a65642e766f6c0473706f740c626c6f636b7363686f6c6573034254430333306409026d73",
+      "sid": "0xb6bcc185cd0a4b96633987fae3f8a6c7d1ba6d9829301f4bb9003aeced7feece",
+      "note": ""
+    },
+    {
+      "name": "interest_rate",
+      "feed": "interest.rate",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "interest.rate",
+            "base_asset": "USDC",
+            "expiry": "30d"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110d696e7465726573742e7261746504555344430100c87e9a0000000009026d73",
+      "sid": "0x154cbd4be788ba60c4ee6359be836584f8de85477e1069468b4c510c367861d8",
+      "note": ""
+    },
+    {
+      "name": "perp_px_mid_twap",
+      "feed": "mid.diff.twap.px",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "mid.diff.twap.px",
+            "exchange": "derive",
+            "asset": "perpetual",
+            "base_asset": "BTC",
+            "quote_asset": "USDC",
+            "interval": "30m"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111106d69642e646966662e747761702e7078066465726976650970657270657475616c03425443045553444340771b000000000009026d73",
+      "sid": "0x6b3dcf4443809a6abc493c71db246f8d5a7405e5a5042f9ba0bf7317aecab085",
+      "note": "interval normalised to ms; the three twap feeds are separate kinds"
+    },
+    {
+      "name": "perp_px_impact_bid_twap",
+      "feed": "impact.bid.diff.twap.px",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "impact.bid.diff.twap.px",
+            "exchange": "derive",
+            "asset": "perpetual",
+            "base_asset": "BTC",
+            "quote_asset": "USDC",
+            "interval": "30m"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111117696d706163742e6269642e646966662e747761702e7078066465726976650970657270657475616c03425443045553444340771b000000000009026d73",
+      "sid": "0x8dd27acc7f1883c18c4e760f2ab3e2478429d4d5827c661b64c5dd34f663d8fd",
+      "note": ""
+    },
+    {
+      "name": "perp_px_impact_ask_twap",
+      "feed": "impact.ask.diff.twap.px",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "impact.ask.diff.twap.px",
+            "exchange": "derive",
+            "asset": "perpetual",
+            "base_asset": "BTC",
+            "quote_asset": "USDC",
+            "interval": "30m"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111117696d706163742e61736b2e646966662e747761702e7078066465726976650970657270657475616c03425443045553444340771b000000000009026d73",
+      "sid": "0x0428352c75368451bbe568148e697db4e71206af413ccacf1f45f468e2c1e31c",
+      "note": ""
+    },
+    {
+      "name": "moneyness_iv",
+      "feed": "moneyness.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "moneyness.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "moneyness": [
+              0.25,
+              0.5,
+              0.75
+            ]
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c6d6f6e65796e6573732e6976076465726962697403425443035356490080613da99f0100000380b2e60e0000000000000000000000000065cd1d0000000000000000000000008017b42c00000000000000000000000009026d73",
+      "sid": "0x681af64f366f4ae67a755a3bb18a451b4882b99316146952e0e71779d0db15c7",
+      "note": ""
+    },
+    {
+      "name": "delta_iv_negative",
+      "feed": "delta.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "delta.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "delta": [
+              -0.25,
+              0.25
+            ]
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110864656c74612e6976076465726962697403425443035356490080613da99f0100000280b2e60e0000000000000000000000000180b2e60e0000000000000000000000000009026d73",
+      "sid": "0xcca687cc692579e798a95f19d794217c60469173a83b989cc8ba369e13268a85",
+      "note": "delta is signed: (u128 magnitude, bool negative), the SVI convention"
+    },
+    {
+      "name": "delta_iv_exponent_form",
+      "feed": "delta.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "delta.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "delta": 1e-7
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110864656c74612e6976076465726962697403425443035356490080613da99f01000001640000000000000000000000000000000009026d73",
+      "sid": "0x34007ce0c4169efb4a222dc9c388a8c2d4fe308a119a5be2e339674ee734bd65",
+      "note": "0.0000001 stringifies as \"1e-7\": exponent-form JSON numbers must scale exactly, not throw"
+    },
+    {
+      "name": "skew_iv",
+      "feed": "skew.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "skew.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "delta": 0.25
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111107736b65772e6976076465726962697403425443035356490080613da99f0100000180b2e60e0000000000000000000000000009026d73",
+      "sid": "0x6460911aac2bd3a46e678fd101eb9a78935d7f45c3ac7712916696fb36312ddb",
+      "note": "scalar delta == its one-element list"
+    },
+    {
+      "name": "risk_reversal_iv",
+      "feed": "risk-reversal.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "risk-reversal.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "delta": 0.25
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "1111111111111111111111111111111111111111111111111111111111111111107269736b2d726576657273616c2e6976076465726962697403425443035356490080613da99f0100000180b2e60e0000000000000000000000000009026d73",
+      "sid": "0x9d451bcc5b300198eaab921beb711503a9cdce0e74ccb655e71e30b28ad222c4",
+      "note": "same shape as skew.iv; the feed string alone separates them"
+    },
+    {
+      "name": "butterfly_iv",
+      "feed": "butterfly.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "butterfly.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "delta": 0.1
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110c627574746572666c792e6976076465726962697403425443035356490080613da99f0100000100e1f5050000000000000000000000000009026d73",
+      "sid": "0x3f513d3d0536d2abc0de8cc72c3ce200b2122afccac0365987eb6acbe3ef5a8b",
+      "note": ""
+    },
+    {
+      "name": "strike_iv_values",
+      "feed": "strike.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "strike.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "strike": [
+              40000,
+              50000
+            ]
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111109737472696b652e6976076465726962697403425443035356490080613da99f01000001020080ca3961240000000000000000000000203d88792d0000000000000000000009026d73",
+      "sid": "0xccc20f59c50163f719ef1862ba199e14779e5bdbd26c8207557e0d94581244a9",
+      "note": ""
+    },
+    {
+      "name": "strike_iv_listed",
+      "feed": "strike.iv",
+      "move_kind": false,
+      "request": {
+        "batch": [
+          {
+            "feed": "strike.iv",
+            "exchange": "deribit",
+            "base_asset": "BTC",
+            "model": "SVI",
+            "expiry": "2026-07-28T15:00:00Z",
+            "strike": "listed"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "111111111111111111111111111111111111111111111111111111111111111109737472696b652e6976076465726962697403425443035356490080613da99f0100000009026d73",
+      "sid": "0x5b2d153e380b28b61b7c8c338cf93dbd9c5b7fc4772c8981c652394c169c3ace",
+      "note": "'listed' (the venue's live set) is its own series, tagged 0x00"
+    }
+  ],
+  "equivalences": [
+    {
+      "name": "expiry_spellings_collapse",
+      "why": "parsing is the canonicalisation",
+      "sids": [
+        "0x29f876378481972bf272eddcbb987579ec3a75a634533295c3c8c2cbfe548a6a",
+        "0x29f876378481972bf272eddcbb987579ec3a75a634533295c3c8c2cbfe548a6a",
+        "0x29f876378481972bf272eddcbb987579ec3a75a634533295c3c8c2cbfe548a6a"
+      ]
+    },
+    {
+      "name": "tenor_spellings_collapse",
+      "why": "duration-normalised: 30d == 720h == 30.0d",
+      "sids": [
+        "0xc248b2a85721bc2e5d00b1dda8baa96d7f2a0270f111d5a511f2aa03b07bddae",
+        "0xc248b2a85721bc2e5d00b1dda8baa96d7f2a0270f111d5a511f2aa03b07bddae",
+        "0xc248b2a85721bc2e5d00b1dda8baa96d7f2a0270f111d5a511f2aa03b07bddae"
+      ]
+    },
+    {
+      "name": "strike_spellings_collapse",
+      "why": "scaled to integers: 42.5 == 42.50",
+      "sids": [
+        "0xbd9d049995595ca20c98d3bf3bb153a5c2bf0a4615509a03c9b74450039b56b8",
+        "0xbd9d049995595ca20c98d3bf3bb153a5c2bf0a4615509a03c9b74450039b56b8",
+        "0xbd9d049995595ca20c98d3bf3bb153a5c2bf0a4615509a03c9b74450039b56b8"
+      ]
+    },
+    {
+      "name": "scalar_equals_singleton_list",
+      "why": "a scalar delta and its one-element list are one series",
+      "sids": [
+        "0x6460911aac2bd3a46e678fd101eb9a78935d7f45c3ac7712916696fb36312ddb",
+        "0x6460911aac2bd3a46e678fd101eb9a78935d7f45c3ac7712916696fb36312ddb"
+      ]
+    }
+  ],
+  "disjointness": {
+    "name": "same_shape_kinds_stay_disjoint",
+    "why": "skew.iv and risk-reversal.iv share a body; feed separates them",
+    "sids": [
+      "0x6460911aac2bd3a46e678fd101eb9a78935d7f45c3ac7712916696fb36312ddb",
+      "0x9d451bcc5b300198eaab921beb711503a9cdce0e74ccb655e71e30b28ad222c4",
+      "0x4edef514051ab0ccd7c4fa059aa4b5aa53be8704ce571c5c4e6f140f8fcebf52",
+      "0xe92b899fc0d5dddea44ee1072339a64ff5c54feea8c916e89b59c35b857d5f7e"
+    ]
+  },
+  "case_disjointness": {
+    "name": "routed_spellings_stay_distinct",
+    "why": "the qn layer interpolates these raw \u2014 two spellings are two upstream feeds, so they must not share an on-chain key",
+    "sids": [
+      "0x29f876378481972bf272eddcbb987579ec3a75a634533295c3c8c2cbfe548a6a",
+      "0x880569e857d224c1f237c3f1c1e5f06298e72d78109e0bdcec2c0d80722f4a92"
+    ]
+  }
+}
