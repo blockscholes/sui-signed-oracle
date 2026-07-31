@@ -13,11 +13,14 @@
     "typecheck": "tsc --noEmit",
     "check": "../scripts/check.sh",
     "precommit": "../scripts/pre-commit.sh",
+    "generate-vectors": "tsx src/generate_sid_vectors.ts",
     "publish-packages": "tsx src/cli.ts publish",
+    "publish-testnet": "tsx src/cli.ts publish-testnet",
     "set-signer": "tsx src/cli.ts set-signer",
     "relay": "tsx src/cli.ts relay",
+    "staging-relay": "tsx src/cli.ts staging-relay",
     "test": "vitest run",
-    "test:unit": "vitest run src/signer.test.ts",
+    "test:unit": "vitest run src/signer.test.ts src/generate_sid_vectors.test.ts",
     "test:e2e": "vitest run src/e2e.test.ts"
   },
   "dependencies": {

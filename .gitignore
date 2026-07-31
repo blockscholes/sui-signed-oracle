@@ -19,7 +19,8 @@ dist/
 # local-only internal notes (open questions, references) — never committed
 *.local.md
 
-# transient localnet deployment ids
+# transient localnet deployment ids (fresh chain id every regenesis).
+# deployment.testnet.json is NOT ignored: it records a real deployment.
 deployment.json
 
 # Ephemeral addressing file `sui client test-publish --pubfile-path <name>` writes for
