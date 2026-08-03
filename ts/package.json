@@ -19,6 +19,7 @@
     "set-signer": "tsx src/cli.ts set-signer",
     "relay": "tsx src/cli.ts relay",
     "staging-relay": "tsx src/cli.ts staging-relay",
+    "mark-relay": "tsx src/cli.ts mark-relay",
     "test": "vitest run",
     "test:unit": "vitest run src/signer.test.ts src/generate_sid_vectors.test.ts",
     "test:e2e": "vitest run src/e2e.test.ts"

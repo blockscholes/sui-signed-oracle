@@ -19,6 +19,7 @@ import {
   readLastBatchTimestamp,
   useTestnetDeployer,
   deriveIndexPxSid,
+  deriveMarkPxSid,
   deriveModelParamsSid,
   type Deployment,
 } from "./chain.js";
@@ -39,7 +40,14 @@ import {
   toFixed,
 } from "./payloads.js";
 import { SPOT_SID, FORWARD_SID, SVI_SID, TEST_SIGNER_PRIV, SPOT, FORWARD, SVI } from "./config.js";
-import { fetchSuiBatches, SUBSCRIPTION, type SuiWireResult } from "./wsapi_client.js";
+import {
+  fetchMarkBatches,
+  fetchSuiBatches,
+  MARK_SUBSCRIPTION,
+  SUBSCRIPTION,
+  WSAPI_URL,
+  type SuiWireResult,
+} from "./wsapi_client.js";
 import { convertWireBatch, type ConvertedBatch } from "./wire_convert.js";
 import { setupTestnet, testnetClient, TESTNET_DEPLOYMENT, TESTNET_RPC } from "./testnet.js";
 
@@ -220,13 +228,18 @@ async function relayConverted(
   }
 }
 
-/// Live e2e proof: subscribe to the staging wsAPI as a Deepbook client for one SUI
-/// value batch (spot index) and one SUI SVI batch (30d composite BTC smile), then
-/// relay both through the real testnet bs_oracle/example_consumer deployment.
+/// Live e2e proof: subscribe to the wsAPI as a Deepbook client for one SUI value
+/// batch (spot index) and one SUI SVI batch (21d composite BTC smile), then relay
+/// both through the real testnet bs_oracle/example_consumer deployment.
+///
+/// The endpoint (`SUI_WSAPI_URL`, staging by default) must be the environment
+/// whose signer is registered in this deployment's SignerRegistry, and whose
+/// `package_ids` config resolves this network + pkg_ver to this bs_oracle. Get
+/// either wrong and verification fails on-chain after gas is spent.
 async function stagingRelayCmd(): Promise<void> {
   const apiKey = process.env["SUI_API_KEY"];
   if (!apiKey) {
-    throw new Error("SUI_API_KEY env var is required (a staging Deepbook API key)");
+    throw new Error("SUI_API_KEY env var is required (a Deepbook API key for the target wsAPI)");
   }
 
   const dep = loadTestnetDeployment();
@@ -235,7 +248,8 @@ async function stagingRelayCmd(): Promise<void> {
   console.log("bs_sid package:", dep.sidPackageId);
   console.log("example_consumer package:", dep.examplePackageId);
 
-  console.log("connecting to staging wsAPI, waiting for one signed value batch + one signed SVI batch...");
+  console.log("wsAPI endpoint:", WSAPI_URL);
+  console.log("connecting to wsAPI, waiting for one signed value batch + one signed SVI batch...");
   const { value, svi }: { value: SuiWireResult; svi: SuiWireResult } = await fetchSuiBatches(apiKey, "testnet");
   console.log("received signed value batch:", JSON.stringify(value.data));
   console.log("received signed svi batch:", JSON.stringify(svi.data));
@@ -294,6 +308,92 @@ async function stagingRelayCmd(): Promise<void> {
   console.log("readback last_timestamp[value sid]:", await readLastTimestamp(client, dep, address, valueSid));
 }
 
+/// Relay two `mark.px` series in one run: a perpetual and a dated future. Same
+/// feed, same base asset, same decimals — the asset class and the expiry are the
+/// only reason they are two series, so this proves both that `asset` is identity
+/// and that an absent expiry still occupies its BCS tag byte rather than being
+/// dropped (which would shift later fields and let two instruments collide).
+///
+/// Both are greek-free, so each value is a single number and rides a value batch.
+async function markRelayCmd(): Promise<void> {
+  const apiKey = process.env["SUI_API_KEY"];
+  if (!apiKey) {
+    throw new Error("SUI_API_KEY env var is required (a Deepbook API key for the target wsAPI)");
+  }
+
+  const dep = loadTestnetDeployment();
+  console.log("testnet RPC:", TESTNET_RPC);
+  console.log("wsAPI endpoint:", WSAPI_URL);
+  console.log("bs_oracle package:", dep.bsPackageId);
+
+  const { perpetual: perpMark, future: futMark } = MARK_SUBSCRIPTION;
+  console.log(`\nsubscribing to two marks:`);
+  console.log(`  perpetual  ${perpMark.exchange} ${perpMark.baseAsset} (no expiry)`);
+  console.log(`  future     ${futMark.exchange} ${futMark.baseAsset} @ ${futMark.expiry}`);
+  const { perpetual, future } = await fetchMarkBatches(apiKey, "testnet");
+  console.log("received signed perpetual mark:", JSON.stringify(perpetual.data));
+  console.log("received signed future mark:", JSON.stringify(future.data));
+
+  const { client, keypair, address } = await setupTestnet();
+  console.log("relayer address:", address);
+
+  const perpConverted = convertWireBatch(perpetual.data);
+  const futConverted = convertWireBatch(future.data);
+  if (perpConverted.kind !== "value" || futConverted.kind !== "value") {
+    throw new Error(
+      `a scalar mark must arrive as a value batch: perpetual=${perpetual.data.batch_kind} future=${future.data.batch_kind}`,
+    );
+  }
+
+  const perpSid = BigInt(firstUpdate(perpConverted.updates).sid);
+  const futSid = BigInt(firstUpdate(futConverted.updates).sid);
+
+  console.log("\nchecking the on-chain derivation against the sids wsAPI derived:");
+  assertSidMatches(
+    "mark.px perpetual",
+    perpSid,
+    await deriveMarkPxSid(
+      client,
+      address,
+      dep,
+      perpMark.asset,
+      perpMark.exchange,
+      perpMark.baseAsset,
+      null,
+      SUBSCRIPTION.decimals,
+      "ms",
+    ),
+  );
+  assertSidMatches(
+    "mark.px future",
+    futSid,
+    await deriveMarkPxSid(
+      client,
+      address,
+      dep,
+      futMark.asset,
+      futMark.exchange,
+      futMark.baseAsset,
+      futMark.expiryMs,
+      SUBSCRIPTION.decimals,
+      "ms",
+    ),
+  );
+  if (perpSid === futSid) {
+    throw new Error("the two marks derived the same sid — they must be distinct series");
+  }
+  console.log("  the two marks are distinct series: OK");
+
+  console.log("");
+  await relayConverted(client, keypair, dep, perpConverted, perpetual.signature, "perpetual mark");
+  await relayConverted(client, keypair, dep, futConverted, future.signature, "future mark");
+
+  console.log("readback perpetual mark[sid]:", await readValue(client, dep, address, perpSid));
+  console.log("readback future mark[sid]:", await readValue(client, dep, address, futSid));
+  console.log("readback last_timestamp[perpetual]:", await readLastTimestamp(client, dep, address, perpSid));
+  console.log("readback last_timestamp[future]:", await readLastTimestamp(client, dep, address, futSid));
+}
+
 const cmd = process.argv[2];
 switch (cmd) {
   case "publish":
@@ -311,10 +411,13 @@ switch (cmd) {
   case "staging-relay":
     await stagingRelayCmd();
     break;
+  case "mark-relay":
+    await markRelayCmd();
+    break;
   default:
     console.error(
       `unknown command: ${cmd ?? "(none)"} — expected: publish | set-signer | relay [tsMs] | ` +
-        `publish-testnet | staging-relay`,
+        `publish-testnet | staging-relay | mark-relay`,
     );
     process.exitCode = 1;
 }
