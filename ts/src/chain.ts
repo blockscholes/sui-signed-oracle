@@ -579,6 +579,53 @@ export function deriveIndexPxSid(
   return devInspectU256(client, sender, tx, 1);
 }
 
+/// Derive a `mark.px` sid on-chain for a scalar (greek-free) mark. `expiryMs`
+/// absent is a perpetual; present is a dated future. Both go through the same
+/// `mark_px`, differing only in `asset` and whether the expiry is there — which
+/// is exactly what makes them two series rather than one.
+///
+/// `Option<Expiry>` is not a pure argument, so even the absent case is a call:
+/// `option::none` for the perpetual, `expiry_at` then `option::some` for the
+/// future. The derive is therefore the last command either way.
+export function deriveMarkPxSid(
+  client: SuiClient,
+  sender: string,
+  dep: Deployment,
+  asset: string,
+  exchange: string,
+  baseAsset: string,
+  expiryMs: bigint | null,
+  decimals: number,
+  timestampPrecision: string,
+): Promise<bigint> {
+  requireSidPackage(dep);
+  const tx = new Transaction();
+  const expiryType = `${dep.sidPackageId}::sid::Expiry`;
+  let expiry;
+  if (expiryMs === null) {
+    expiry = tx.moveCall({ target: "0x1::option::none", typeArguments: [expiryType] });
+  } else {
+    const instant = tx.moveCall({
+      target: `${dep.sidPackageId}::sid::expiry_at`,
+      arguments: [tx.pure.u64(expiryMs)],
+    });
+    expiry = tx.moveCall({ target: "0x1::option::some", typeArguments: [expiryType], arguments: [instant] });
+  }
+  tx.moveCall({
+    target: `${dep.sidPackageId}::sid::mark_px`,
+    arguments: [
+      tx.pure.address(dep.bsPackageId),
+      tx.pure.string(asset),
+      tx.pure.string(exchange),
+      tx.pure.string(baseAsset),
+      expiry,
+      tx.pure.u8(decimals),
+      tx.pure.string(timestampPrecision),
+    ],
+  });
+  return devInspectU256(client, sender, tx, expiryMs === null ? 1 : 2);
+}
+
 /// Derive a `model.params` composite sid on-chain for a constant-maturity tenor.
 /// Two chained moveCalls: `Expiry` is `copy, drop`, so the first call's result
 /// passes straight into the second.
