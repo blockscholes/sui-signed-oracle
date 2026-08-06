@@ -152,12 +152,14 @@ module bs_sid::sid {
         timestamp_precision: String,
     }
 
-    /// `settlement.px`. No asset and no quote: a settlement print is scoped
-    /// by base asset and the settlement instant alone.
+    /// `settlement.px`. `asset` is `spot` for a settlement print, but a
+    /// suffixed class (e.g. `spot-commodity`) branches the same shape; no
+    /// quote — scoped by base asset and the settlement instant.
     public struct SettlementPx has copy, drop {
         exchange: String,
         base_asset: String,
         expiry: Expiry,
+        asset: String,
         decimals: u8,
         /// Unit of this series' u64 timestamps — signed identity (e.g. `ms`, `ns`, `s`).
         timestamp_precision: String,
@@ -373,6 +375,7 @@ module bs_sid::sid {
     /// the wsAPI enforces at subscribe.
     public fun settlement_px_generic(
         package_id: address,
+        asset: String,
         exchange: String,
         base_asset: String,
         expiry_ms: u64,
@@ -383,6 +386,7 @@ module bs_sid::sid {
             exchange,
             base_asset,
             expiry: expiry_at(expiry_ms),
+            asset,
             decimals,
             timestamp_precision,
         };
@@ -392,6 +396,7 @@ module bs_sid::sid {
     /// The settlement print at this feed's default exchange.
     public fun settlement_px(
         package_id: address,
+        asset: String,
         base_asset: String,
         expiry_ms: u64,
         decimals: u8,
@@ -399,6 +404,7 @@ module bs_sid::sid {
     ): u256 {
         settlement_px_generic(
             package_id,
+            asset,
             DEFAULT_SETTLEMENT_EXCHANGE.to_string(),
             base_asset,
             expiry_ms,

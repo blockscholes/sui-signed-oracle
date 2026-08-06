@@ -659,9 +659,41 @@
           }
         }
       },
-      "preimage": "11111111111111111111111111111111111111111111111111111111111111110d736574746c656d656e742e707809636f6d706f7369746504485950450080613da99f01000009026d73",
-      "sid": "0xb0f36a4bf705d213886362a7b1b238c155a0d3ef946ac30771db5bffa85d0ae7",
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110d736574746c656d656e742e707809636f6d706f7369746504485950450080613da99f0100000473706f7409026d73",
+      "sid": "0x50a21cf32bf590f21cf5c6f14772300699e528ea6c719ec1cad1ab59fe75dbf5",
       "note": "exchange defaults to composite; tenor expiry is rejected"
+    },
+    {
+      "name": "settlement_px_asset_override",
+      "feed": "settlement.px",
+      "move_kind": true,
+      "request": {
+        "batch": [
+          {
+            "feed": "settlement.px",
+            "asset": "spot-equity",
+            "base_asset": "HYPE",
+            "expiry": "2026-07-28T15:00:00Z"
+          }
+        ],
+        "options": {
+          "format": {
+            "timestamp": "ms",
+            "hexify": false,
+            "decimals": 9
+          },
+          "signature": {
+            "type": "SUI",
+            "pkg_ver": 1,
+            "domain": {
+              "network": "testnet"
+            }
+          }
+        }
+      },
+      "preimage": "11111111111111111111111111111111111111111111111111111111111111110d736574746c656d656e742e707809636f6d706f7369746504485950450080613da99f0100000b73706f742d65717569747909026d73",
+      "sid": "0x4ac7b1f8667200d49fd41f5301ae23aeebad63c5bed712cfa863f52457c57bfe",
+      "note": "asset branches the settlement underlying (e.g. an RWA spot-equity): a non-default asset is a different series"
     },
     {
       "name": "index_iv",

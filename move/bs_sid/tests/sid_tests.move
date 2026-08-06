@@ -55,7 +55,8 @@ module bs_sid::sid_tests {
     const MODEL_PARAMS_TENOR: u256 = 0xc248b2a85721bc2e5d00b1dda8baa96d7f2a0270f111d5a511f2aa03b07bddae;
     const MODEL_PARAMS_DECIMALS_5: u256 = 0x0d96e85ca50a4d31530575202d1d0e6c2f5738531163248c20d5c6335fd22a68;
     const MODEL_PARAMS_SECOND_PRECISION: u256 = 0x68c29e470e07e248ed8f7a9f82f8000ab6af07e70796d5a45c0d0b8616b2b6b9;
-    const SETTLEMENT_PX: u256 = 0xb0f36a4bf705d213886362a7b1b238c155a0d3ef946ac30771db5bffa85d0ae7;
+    const SETTLEMENT_PX: u256 = 0x50a21cf32bf590f21cf5c6f14772300699e528ea6c719ec1cad1ab59fe75dbf5;
+    const SETTLEMENT_PX_ASSET_OVERRIDE: u256 = 0x4ac7b1f8667200d49fd41f5301ae23aeebad63c5bed712cfa863f52457c57bfe;
 
     // === index.px ===
 
@@ -473,12 +474,29 @@ module bs_sid::sid_tests {
     fun settlement_px_matches_the_shared_vector() {
         let sid = sid::settlement_px(
             ORACLE_PACKAGE_ID,
+            b"spot".to_string(),
             b"HYPE".to_string(),
             EXPIRY_MS,
             DECIMALS,
             b"ms".to_string(),
         );
         assert_eq!(sid, SETTLEMENT_PX);
+    }
+
+    /// `asset` branches the settlement underlying (e.g. an RWA spot-equity
+    /// print), so the settlement convenience form pins it too.
+    #[test]
+    fun settlement_px_asset_is_part_of_the_identity() {
+        let sid = sid::settlement_px(
+            ORACLE_PACKAGE_ID,
+            b"spot-equity".to_string(),
+            b"HYPE".to_string(),
+            EXPIRY_MS,
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert_eq!(sid, SETTLEMENT_PX_ASSET_OVERRIDE);
+        assert!(sid != SETTLEMENT_PX);
     }
 
     // === Deployment scope ===

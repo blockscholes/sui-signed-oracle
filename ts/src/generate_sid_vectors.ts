@@ -327,14 +327,18 @@ function bodyModelParams(
   );
 }
 
-function bodySettlementPx(o: FormatOpts & { baseAsset: string; expiry: string; exchange?: string }): Uint8Array {
-  // No asset, no quote: scoped by base asset and the settlement instant, which
-  // is always absolute — the model rejects tenors.
+function bodySettlementPx(
+  o: FormatOpts & { baseAsset: string; expiry: string; asset?: string; exchange?: string },
+): Uint8Array {
+  // asset is "spot" for a settlement print; a suffixed class branches the same
+  // shape. No quote. Scoped by base asset and the settlement instant, which is
+  // always absolute — the model rejects tenors.
   if (isTenor(o.expiry)) throw new Error("settlement.px expiry must be absolute");
   return concatBytes(
     bStr(routed(o.exchange ?? "composite")),
     bStr(routed(o.baseAsset)),
     bExpiry(o.expiry),
+    bStr(routed(o.asset ?? "spot")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
   );
@@ -818,6 +822,19 @@ export function build(): Record<string, Json | Vector[]> {
         options: { format: fmt, signature },
       },
       "exchange defaults to composite; tenor expiry is rejected",
+    ),
+    vectorCase(
+      "settlement_px_asset_override",
+      "settlement.px",
+      bodySettlementPx({ decimals: 9, baseAsset: "HYPE", expiry: ABSOLUTE, asset: "spot-equity" }),
+      {
+        feed: "settlement.px",
+        asset: "spot-equity",
+        base_asset: "HYPE",
+        expiry: ABSOLUTE,
+        options: { format: fmt, signature },
+      },
+      "asset branches the settlement underlying (e.g. an RWA spot-equity): a non-default asset is a different series",
     ),
     vectorCase("index_iv", "index.iv", bodyIndexIv({ decimals: 9, baseAsset: "BTC", expiry: "30d" }), {
       feed: "index.iv",
