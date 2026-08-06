@@ -340,11 +340,16 @@ function bodySettlementPx(o: FormatOpts & { baseAsset: string; expiry: string; e
   );
 }
 
-function bodyIndexIv(o: FormatOpts & { baseAsset: string; expiry: string; exchange?: string }): Uint8Array {
+function bodyIndexIv(
+  o: FormatOpts & { baseAsset: string; expiry: string; asset?: string; exchange?: string },
+): Uint8Array {
   return concatBytes(
     bStr(routed(o.exchange ?? "composite")),
     bStr(routed(o.baseAsset)),
     bExpiry(o.expiry),
+    // Defaults to "option" so an omitted asset and an explicit "option" derive
+    // byte-identically (mirrors wsAPI's IndexIVParams SidField default).
+    bStr(routed(o.asset ?? "option")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
   );
