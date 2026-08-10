@@ -268,9 +268,9 @@ sid      = keccak256(preimage), read big-endian into u256
   `model_params`, `settlement_px` in `bs_sid::sid`, each taking the kind's identity fields and
   returning the `sid` in one call; each has an `*_generic` form spelling out the fields the short
   one defaults) — never caller-supplied, so a request cannot name a feed that contradicts the
-  descriptor it derives. `asset` is a parameter of every form, short or generic: asset classes carry
-  a suffix for a non-crypto underlying (`spot-equity`, `future-equity`, `option-equity`), so pinning
-  one inside a convenience function would put those series out of reach.
+  descriptor it derives. `asset` is a parameter of every generic form and of every short form except
+  `settlement_px`, which pins `spot` — its callers only ever settle spot underlyings, and a suffixed
+  one (`spot-equity`, `future-equity`, `option-equity`) still derives through `settlement_px_generic`.
 - `body` is the feed kind's descriptor struct, BCS-encoded, identity fields in pinned order and
   `decimals`/`timestamp_precision` last. Absent `Option` fields still emit their `0x00` tag — BCS is
   positional, so dropping one would shift every later field. **Timestamp precision is signed identity**:

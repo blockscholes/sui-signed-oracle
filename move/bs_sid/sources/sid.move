@@ -393,10 +393,10 @@ module bs_sid::sid {
         digest(package_id, FEED_SETTLEMENT_PX, bcs::to_bytes(&d))
     }
 
-    /// The settlement print at this feed's default exchange.
+    /// The settlement print at this feed's default exchange; `asset` is pinned
+    /// to `spot`. A suffixed underlying uses `settlement_px_generic`.
     public fun settlement_px(
         package_id: address,
-        asset: String,
         base_asset: String,
         expiry_ms: u64,
         decimals: u8,
@@ -404,7 +404,7 @@ module bs_sid::sid {
     ): u256 {
         settlement_px_generic(
             package_id,
-            asset,
+            b"spot".to_string(),
             DEFAULT_SETTLEMENT_EXCHANGE.to_string(),
             base_asset,
             expiry_ms,

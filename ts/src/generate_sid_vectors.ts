@@ -352,7 +352,7 @@ function bodyIndexIv(
     bStr(routed(o.baseAsset)),
     bExpiry(o.expiry),
     // Defaults to "option" so an omitted asset and an explicit "option" derive
-    // byte-identically (mirrors wsAPI's IndexIVParams SidField default).
+    // byte-identically.
     bStr(routed(o.asset ?? "option")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
@@ -375,9 +375,9 @@ function bodyRealizedVol(
 }
 
 function bodyInterestRate(o: FormatOpts & { baseAsset: string; expiry: string; asset?: string }): Uint8Array {
-  // asset branches the rate source (crypto basis vs. a suffixed T-pricer
-  // theoretical rate); defaults to "future" so an omitted field and an
-  // explicit "future" derive byte-identically.
+  // asset branches the rate source (crypto basis vs. a suffixed theoretical
+  // rate); defaults to "future" so an omitted field and an explicit "future"
+  // derive byte-identically.
   return concatBytes(
     bStr(routed(o.baseAsset)),
     bExpiry(o.expiry),

@@ -468,13 +468,10 @@ module bs_sid::sid_tests {
 
     // === settlement.px ===
 
-    /// A tenor settlement needs no rejection test: `settlement_px` takes raw
-    /// unix-ms, so a tenor is unrepresentable by construction.
     #[test]
     fun settlement_px_matches_the_shared_vector() {
         let sid = sid::settlement_px(
             ORACLE_PACKAGE_ID,
-            b"spot".to_string(),
             b"HYPE".to_string(),
             EXPIRY_MS,
             DECIMALS,
@@ -483,13 +480,12 @@ module bs_sid::sid_tests {
         assert_eq!(sid, SETTLEMENT_PX);
     }
 
-    /// `asset` branches the settlement underlying (e.g. an RWA spot-equity
-    /// print), so the settlement convenience form pins it too.
     #[test]
     fun settlement_px_asset_is_part_of_the_identity() {
-        let sid = sid::settlement_px(
+        let sid = sid::settlement_px_generic(
             ORACLE_PACKAGE_ID,
             b"spot-equity".to_string(),
+            b"composite".to_string(),
             b"HYPE".to_string(),
             EXPIRY_MS,
             DECIMALS,
