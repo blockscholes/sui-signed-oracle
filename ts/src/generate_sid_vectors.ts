@@ -327,24 +327,33 @@ function bodyModelParams(
   );
 }
 
-function bodySettlementPx(o: FormatOpts & { baseAsset: string; expiry: string; exchange?: string }): Uint8Array {
-  // No asset, no quote: scoped by base asset and the settlement instant, which
-  // is always absolute — the model rejects tenors.
+function bodySettlementPx(
+  o: FormatOpts & { baseAsset: string; expiry: string; asset?: string; exchange?: string },
+): Uint8Array {
+  // asset is "spot" for a settlement print; a suffixed class branches the same
+  // shape. No quote. Scoped by base asset and the settlement instant, which is
+  // always absolute — the model rejects tenors.
   if (isTenor(o.expiry)) throw new Error("settlement.px expiry must be absolute");
   return concatBytes(
     bStr(routed(o.exchange ?? "composite")),
     bStr(routed(o.baseAsset)),
     bExpiry(o.expiry),
+    bStr(routed(o.asset ?? "spot")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
   );
 }
 
-function bodyIndexIv(o: FormatOpts & { baseAsset: string; expiry: string; exchange?: string }): Uint8Array {
+function bodyIndexIv(
+  o: FormatOpts & { baseAsset: string; expiry: string; asset?: string; exchange?: string },
+): Uint8Array {
   return concatBytes(
     bStr(routed(o.exchange ?? "composite")),
     bStr(routed(o.baseAsset)),
     bExpiry(o.expiry),
+    // Defaults to "option" so an omitted asset and an explicit "option" derive
+    // byte-identically.
+    bStr(routed(o.asset ?? "option")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
   );
@@ -365,8 +374,17 @@ function bodyRealizedVol(
   );
 }
 
-function bodyInterestRate(o: FormatOpts & { baseAsset: string; expiry: string }): Uint8Array {
-  return concatBytes(bStr(routed(o.baseAsset)), bExpiry(o.expiry), bU8(o.decimals), bStr(o.precision ?? "ms"));
+function bodyInterestRate(o: FormatOpts & { baseAsset: string; expiry: string; asset?: string }): Uint8Array {
+  // asset branches the rate source (crypto basis vs. a suffixed theoretical
+  // rate); defaults to "future" so an omitted field and an explicit "future"
+  // derive byte-identically.
+  return concatBytes(
+    bStr(routed(o.baseAsset)),
+    bExpiry(o.expiry),
+    bStr(routed(o.asset ?? "future")),
+    bU8(o.decimals),
+    bStr(o.precision ?? "ms"),
+  );
 }
 
 function bodyPerpPx(
@@ -396,6 +414,7 @@ function bodyIvMoneyness(
     model: string;
     expiry: string;
     moneyness: number | number[];
+    asset?: string;
   },
 ): Uint8Array {
   return concatBytes(
@@ -404,6 +423,9 @@ function bodyIvMoneyness(
     bStr(routed(o.model)),
     bExpiry(o.expiry),
     bVec(asList(o.moneyness).map((x) => bScaled(x, o.decimals))),
+    // asset branches the option-variant surface (crypto vs. a suffixed
+    // commodity/fx/equity underlying); defaults to "option".
+    bStr(routed(o.asset ?? "option")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
   );
@@ -416,6 +438,7 @@ function bodyIvDelta(
     model: string;
     expiry: string;
     delta: number | number[];
+    asset?: string;
   },
 ): Uint8Array {
   // delta.iv / skew.iv / risk-reversal.iv / butterfly.iv share this shape; the
@@ -426,6 +449,7 @@ function bodyIvDelta(
     bStr(routed(o.model)),
     bExpiry(o.expiry),
     bVec(asList(o.delta).map((x) => bSignedScaled(x, o.decimals))),
+    bStr(routed(o.asset ?? "option")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
   );
@@ -438,6 +462,7 @@ function bodyIvStrike(
     model: string;
     expiry: string;
     strike: number[] | "listed";
+    asset?: string;
   },
 ): Uint8Array {
   // A tagged union: "listed" (the venue's live strike set) is a different
@@ -452,6 +477,7 @@ function bodyIvStrike(
     bStr(routed(o.model)),
     bExpiry(o.expiry),
     strikeBytes,
+    bStr(routed(o.asset ?? "option")),
     bU8(o.decimals),
     bStr(o.precision ?? "ms"),
   );
@@ -797,6 +823,19 @@ export function build(): Record<string, Json | Vector[]> {
       },
       "exchange defaults to composite; tenor expiry is rejected",
     ),
+    vectorCase(
+      "settlement_px_asset_override",
+      "settlement.px",
+      bodySettlementPx({ decimals: 9, baseAsset: "HYPE", expiry: ABSOLUTE, asset: "spot-equity" }),
+      {
+        feed: "settlement.px",
+        asset: "spot-equity",
+        base_asset: "HYPE",
+        expiry: ABSOLUTE,
+        options: { format: fmt, signature },
+      },
+      "asset branches the settlement underlying (e.g. an RWA spot-equity): a non-default asset is a different series",
+    ),
     vectorCase("index_iv", "index.iv", bodyIndexIv({ decimals: 9, baseAsset: "BTC", expiry: "30d" }), {
       feed: "index.iv",
       base_asset: "BTC",
@@ -815,6 +854,19 @@ export function build(): Record<string, Json | Vector[]> {
       expiry: "30d",
       options: { format: fmt, signature },
     }),
+    vectorCase(
+      "interest_rate_asset_override",
+      "interest.rate",
+      bodyInterestRate({ decimals: 9, baseAsset: "XAU", expiry: "30d", asset: "future-commodity" }),
+      {
+        feed: "interest.rate",
+        asset: "future-commodity",
+        base_asset: "XAU",
+        expiry: "30d",
+        options: { format: fmt, signature },
+      },
+      "asset branches the rate source (crypto basis vs. a suffixed T-pricer theoretical rate): a non-default asset is a different series",
+    ),
     vectorCase(
       "perp_px_mid_twap",
       "mid.diff.twap.px",
@@ -878,6 +930,30 @@ export function build(): Record<string, Json | Vector[]> {
         moneyness: [0.25, 0.5, 0.75],
         options: { format: fmt, signature },
       },
+    ),
+    vectorCase(
+      "moneyness_iv_asset_override",
+      "moneyness.iv",
+      bodyIvMoneyness({
+        decimals: 9,
+        exchange: "composite",
+        baseAsset: "XAU",
+        model: "SVI",
+        expiry: ABSOLUTE,
+        moneyness: [0.25, 0.5, 0.75],
+        asset: "option-commodity",
+      }),
+      {
+        feed: "moneyness.iv",
+        asset: "option-commodity",
+        exchange: "composite",
+        base_asset: "XAU",
+        model: "SVI",
+        expiry: ABSOLUTE,
+        moneyness: [0.25, 0.5, 0.75],
+        options: { format: fmt, signature },
+      },
+      "asset branches the option-variant surface (crypto vs. a suffixed commodity/fx/equity underlying): a non-default asset is a different series",
     ),
     vectorCase(
       "delta_iv_negative",
