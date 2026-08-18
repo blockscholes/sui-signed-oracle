@@ -21,9 +21,22 @@ runs:
         # "latest" from tag_name via a sed pattern that breaks on GitHub's
         # compact (no-space) JSON and yields a garbage download URL.
         SUIUP_VERSION="v0.0.14"
-        SUIUP_SHA256="c0b9fea95d52c4c5855478c3ee56e58e446614f32300dbd41fcc637a2e09878a"
+        case "$(uname -m)" in
+          x86_64)
+            SUIUP_ASSET="suiup-Linux-musl-x86_64.tar.gz"
+            SUIUP_SHA256="c0b9fea95d52c4c5855478c3ee56e58e446614f32300dbd41fcc637a2e09878a"
+            ;;
+          aarch64|arm64)
+            SUIUP_ASSET="suiup-Linux-musl-arm64.tar.gz"
+            SUIUP_SHA256="9e5f211342014b45fd221188002f2acf97da96aa262095af3373de62c40272c6"
+            ;;
+          *)
+            echo "Unsupported runner architecture: $(uname -m)"
+            exit 1
+            ;;
+        esac
         mkdir -p "$HOME/.local/bin"
-        curl -sSfL "https://github.com/MystenLabs/suiup/releases/download/${SUIUP_VERSION}/suiup-Linux-musl-x86_64.tar.gz" \
+        curl -sSfL "https://github.com/MystenLabs/suiup/releases/download/${SUIUP_VERSION}/${SUIUP_ASSET}" \
           -o /tmp/suiup.tar.gz
         echo "${SUIUP_SHA256}  /tmp/suiup.tar.gz" | sha256sum -c -
         tar -xzf /tmp/suiup.tar.gz -C "$HOME/.local/bin" suiup
