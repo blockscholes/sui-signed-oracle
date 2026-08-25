@@ -504,8 +504,11 @@ admin); verification requires the recovered key to equal it.
 
 ## 3. Replay
 
-Ordering keys off each update's own `timestamp`, and is entirely the consumer's. The batch-level
-`timestamp` plays no part in it (see "The batch timestamp is a different signal" below).
+Ordering keys off each update's own `timestamp`, and is entirely the consumer's. For the
+non-absolute batch kinds, the batch-level `timestamp` plays no part in it (see "The batch
+timestamp is a different signal" below); the absolute batch kinds have no per-update
+`timestamp` at all, so for them the batch-level `timestamp` *is* the replay key (see "Absolute
+batches and the format pin" below).
 
 The verifier does not interpret either timestamp at all: it decodes them, binds them under the
 signature, and hands them on. Timestamp **precision is the client's choice** (`format.timestamp`),
@@ -542,8 +545,16 @@ series has not advanced, so its stored value must not move either.
 batch in which *every* update is pinned and therefore skipped, per-update timestamps alone leave a
 consumer unable to distinguish "nothing moved" from "the publisher died". The envelope's `timestamp`
 closes that gap: it is when the batch was sent, so it advances on every flush regardless of what the
-data did. It takes no part in the replay guard — `example_consumer` records it as `last_batch_ts` and
-emits it on `BatchIngested` purely as the liveness read.
+data did. For the non-absolute batch kinds it takes no part in replay — `example_consumer` records
+it separately as `last_batch_ts` and emits it on `BatchIngested` purely as the liveness read.
+
+**Absolute batches and the format pin.** The absolute batch kinds (`batch_kind` `2`/`3`) have no
+per-update `timestamp`, so their replay key *is* the envelope `timestamp` — always milliseconds,
+per `example_consumer`'s own policy. That is a different unit from a non-absolute `sid`'s own
+`timestamp_precision`, which may not be milliseconds, so the two are not comparable. Nothing in
+the wire format constrains a `sid` to one batch kind for life, so `example_consumer` pins each
+`sid` to whichever kind first writes it: an update for a `sid` arriving under the other kind is
+skipped, the same as a stale replay, rather than being compared across incompatible domains.
 
 **Why the split.** The verifier is stateless about feeds: it only proves the signed message is
 authentic. The consumer owns the per-feed state, so per-`sid` replay/monotonicity lives there.
