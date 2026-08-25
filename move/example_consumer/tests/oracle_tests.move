@@ -482,4 +482,95 @@ module example_consumer::oracle_tests {
         teardown(oracle, clk);
         scenario.end();
     }
+
+    /// A `sid`'s per-update `timestamp` (its own `timestamp_precision`) and the
+    /// absolute batch's envelope `timestamp` (always ms) are not comparable units.
+    /// Once a normal batch has pinned a `sid`, a later absolute batch for the same
+    /// `sid` must be skipped outright rather than compared against `last_ts`.
+    #[test]
+    fun absolute_update_is_skipped_after_sid_is_pinned_to_normal() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        oracle::ingest_value_batch(&mut oracle, value_batch(TS1, VALUE_A), &clk);
+        assert!(!oracle::is_pinned_absolute(&oracle, SID_A));
+
+        // A batch timestamp far larger than TS1 would (wrongly) look newer under a
+        // naive direct comparison; the format pin must reject it regardless.
+        oracle::ingest_value_absolute_batch(
+            &mut oracle,
+            verify::new_value_absolute_batch_for_testing(
+                BATCH_TS1,
+                vector[verify::new_value_absolute_update_for_testing(SID_A, VALUE_B)],
+            ),
+            &clk,
+        );
+
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_A), TS1);
+        assert!(!oracle::is_pinned_absolute(&oracle, SID_A));
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
+
+    /// Symmetric case: once an absolute batch has pinned a `sid`, a later normal
+    /// update for the same `sid` must be skipped, not compared against `last_ts`.
+    #[test]
+    fun normal_update_is_skipped_after_sid_is_pinned_to_absolute() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        oracle::ingest_value_absolute_batch(
+            &mut oracle,
+            verify::new_value_absolute_batch_for_testing(
+                BATCH_TS1,
+                vector[verify::new_value_absolute_update_for_testing(SID_A, VALUE_A)],
+            ),
+            &clk,
+        );
+        assert!(oracle::is_pinned_absolute(&oracle, SID_A));
+
+        // A per-update timestamp strictly greater than BATCH_TS1 would (wrongly) pass
+        // replay_guard on its own; the format pin must reject it before that check runs.
+        oracle::ingest_value_batch(&mut oracle, value_batch(BATCH_TS1 + 1, VALUE_B), &clk);
+
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
+        assert_eq!(oracle::last_timestamp(&oracle, SID_A), BATCH_TS1);
+        assert!(oracle::is_pinned_absolute(&oracle, SID_A));
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
+
+    /// The format pin is per-`sid`, not global: a different `sid` in the same batch
+    /// is unaffected by another `sid`'s pinned format.
+    #[test]
+    fun format_pin_does_not_block_other_sids_in_the_same_batch() {
+        let mut scenario = ts::begin(ADMIN);
+        let (mut oracle, clk) = setup(&mut scenario);
+
+        oracle::ingest_value_batch(&mut oracle, value_batch(TS1, VALUE_A), &clk);
+
+        oracle::ingest_value_absolute_batch(
+            &mut oracle,
+            verify::new_value_absolute_batch_for_testing(
+                BATCH_TS1,
+                vector[
+                    // SID_A is pinned to normal, so this entry is skipped...
+                    verify::new_value_absolute_update_for_testing(SID_A, VALUE_B),
+                    // ...but SID_B has never been written, so it applies.
+                    verify::new_value_absolute_update_for_testing(SID_B, VALUE_B),
+                ],
+            ),
+            &clk,
+        );
+
+        assert_eq!(oracle::value(&oracle, SID_A), VALUE_A);
+        assert_eq!(oracle::value(&oracle, SID_B), VALUE_B);
+        assert!(oracle::is_pinned_absolute(&oracle, SID_B));
+
+        teardown(oracle, clk);
+        scenario.end();
+    }
 }

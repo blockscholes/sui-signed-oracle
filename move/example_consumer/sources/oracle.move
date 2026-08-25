@@ -10,7 +10,11 @@
 /// milliseconds and rejects envelopes that are too old or too far ahead of Sui's
 /// `Clock`. Per-update timestamp precision and freshness remain part of each configured
 /// feed's consumer policy. The "absolute" batches carry no per-update timestamp, so
-/// their replay guard uses the batch's own `timestamp` for every update instead.
+/// their replay guard uses the batch's own `timestamp` for every update instead — a unit
+/// (milliseconds) that need not match a non-absolute `sid`'s own `timestamp_precision`.
+/// Because those two domains aren't comparable, whichever batch format first writes a
+/// `sid` pins it: later updates for that `sid` arriving under the other format are
+/// skipped, the same as a stale replay.
 ///
 /// The greatest accepted batch `timestamp` is recorded separately as `last_batch_ts`,
 /// so a feed whose series have all gone quiet is still visibly running without an
@@ -59,14 +63,17 @@ module example_consumer::oracle {
 
     /// Latest value (spot or forward price) per `sid`, latest SVI per `sid`, the
     /// last-accepted update `timestamp` per `sid` (replay guard spans both categories),
-    /// and the greatest accepted batch `timestamp` (feed liveness — advances even when
-    /// every update in a newer batch was skipped).
+    /// the greatest accepted batch `timestamp` (feed liveness — advances even when
+    /// every update in a newer batch was skipped), and whether each `sid` is pinned to
+    /// the absolute batch format (normal vs. absolute `timestamp` domains aren't
+    /// comparable, so a `sid` commits to whichever format wrote it first).
     public struct ExampleOracle has key {
         id: UID,
         values: Table<u256, u128>,
         svis: Table<u256, RawSvi>,
         last_ts: Table<u256, u64>,
         last_batch_ts: u64,
+        sid_is_absolute: Table<u256, bool>,
     }
 
     fun init(ctx: &mut TxContext) {
@@ -76,6 +83,7 @@ module example_consumer::oracle {
             svis: table::new(ctx),
             last_ts: table::new(ctx),
             last_batch_ts: 0,
+            sid_is_absolute: table::new(ctx),
         });
     }
 
@@ -95,6 +103,7 @@ module example_consumer::oracle {
             let sid = u.value_sid();
             let timestamp = u.value_timestamp();
             i = i + 1;
+            if (!format_guard(oracle, sid, false)) continue;
             if (!replay_guard(oracle, sid, timestamp)) continue;
             let v = u.value_v();
             assert!(v > 0, EZeroValue);
@@ -121,6 +130,7 @@ module example_consumer::oracle {
             let sid = u.svi_sid();
             let timestamp = u.svi_timestamp();
             i = i + 1;
+            if (!format_guard(oracle, sid, false)) continue;
             if (!replay_guard(oracle, sid, timestamp)) continue;
             let (a_mag, a_neg, b, sigma, rho_mag, rho_neg, m_mag, m_neg) = u.svi_fields();
             upsert(
@@ -159,6 +169,7 @@ module example_consumer::oracle {
             let u = &updates[i];
             let sid = u.value_absolute_sid();
             i = i + 1;
+            if (!format_guard(oracle, sid, true)) continue;
             if (!replay_guard(oracle, sid, batch_timestamp)) continue;
             let v = u.value_absolute_v();
             assert!(v > 0, EZeroValue);
@@ -185,6 +196,7 @@ module example_consumer::oracle {
             let u = &updates[i];
             let sid = u.svi_absolute_sid();
             i = i + 1;
+            if (!format_guard(oracle, sid, true)) continue;
             if (!replay_guard(oracle, sid, batch_timestamp)) continue;
             let (a_mag, a_neg, b, sigma, rho_mag, rho_neg, m_mag, m_neg) = u.svi_absolute_fields();
             upsert(
@@ -217,6 +229,10 @@ module example_consumer::oracle {
     public fun value(oracle: &ExampleOracle, sid: u256): u128 { oracle.values[sid] }
 
     public fun last_timestamp(oracle: &ExampleOracle, sid: u256): u64 { oracle.last_ts[sid] }
+
+    /// Whether `sid` is pinned to the absolute batch format. Aborts if `sid` has never
+    /// had an update applied.
+    public fun is_pinned_absolute(oracle: &ExampleOracle, sid: u256): bool { oracle.sid_is_absolute[sid] }
 
     /// Greatest accepted batch `timestamp`, regardless of whether any updates in that
     /// batch applied — the feed-liveness read.
@@ -253,6 +269,23 @@ module example_consumer::oracle {
         if (batch_timestamp > oracle.last_batch_ts) {
             oracle.last_batch_ts = batch_timestamp;
         };
+    }
+
+    /// Per-`sid` batch-format guard; returns whether to apply the update.
+    ///
+    /// A non-absolute `sid`'s `timestamp` is in that feed's own `timestamp_precision`;
+    /// an absolute `sid`'s `timestamp` is the millisecond batch envelope. Those two
+    /// domains aren't comparable, so `replay_guard` can only compare timestamps that
+    /// came from the same domain. The first batch format to write a `sid` pins it;
+    /// an update for that `sid` arriving under the other format is skipped, same as a
+    /// stale replay, rather than being compared across domains.
+    fun format_guard(oracle: &mut ExampleOracle, sid: u256, is_absolute: bool): bool {
+        if (oracle.sid_is_absolute.contains(sid)) {
+            oracle.sid_is_absolute[sid] == is_absolute
+        } else {
+            oracle.sid_is_absolute.add(sid, is_absolute);
+            true
+        }
     }
 
     /// Per-`sid` timestamp guard; returns whether to apply the update.
