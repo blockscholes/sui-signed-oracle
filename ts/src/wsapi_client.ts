@@ -17,6 +17,12 @@ import type { WireBatchData } from "./wire_convert.js";
 const DEFAULT_WSAPI_URL = "wss://staging-websocket-api.blockscholes.com/";
 export const WSAPI_URL = process.env["SUI_WSAPI_URL"] ?? DEFAULT_WSAPI_URL;
 
+/// The verifying-package version this client asks to be signed for. Block
+/// Scholes resolves it per network through `/config/shared/sui_oracle/package_ids`
+/// into the bs_oracle package id that prefixes the signed bytes, so it selects
+/// the on-chain deployment a batch will verify against.
+const PKG_VER = 1;
+
 export interface SuiWireResult {
   data: WireBatchData;
   signature: { r: string; s: string; v: string };
@@ -78,12 +84,14 @@ export const SUBSCRIPTION = {
   tenorMs: tenorToMs(TENOR),
 } as const;
 
+/// `pkg_ver` belongs to the domain, not beside it: a top-level one is rejected
+/// outright rather than ignored, because a silently dropped key would sign for
+/// the server's default package version instead of the requested one.
 function suiSignature(network: string) {
   return {
     type: "SUI",
-    pkg_ver: 1,
     signature_schema: "ecdsa",
-    domain: { network },
+    domain: { network, pkg_ver: PKG_VER },
   };
 }
 
