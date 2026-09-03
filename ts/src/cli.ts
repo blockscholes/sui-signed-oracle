@@ -1,11 +1,19 @@
-// CLI for the signed-oracle MVP. One entry, three subcommands:
+// CLI for the signed-oracle MVP. One entry; the localnet demo plus the two real
+// networks:
 //   pnpm publish-packages  -> publish     publish both packages, set the signer, write deployment.json
 //   pnpm set-signer        -> set-signer  set/rotate the signer on an already-published registry
 //   pnpm relay [tsMs]      -> relay       sign + relay a value batch (two series) and an SVI batch; re-running
 //                                         with the SAME timestamp succeeds as a no-op (each update's timestamp
 //                                         must be strictly newer than that sid's stored one to be applied)
+//   pnpm publish-testnet   -> publish-testnet / publish-mainnet   publish all three packages to a real network
+//   pnpm staging-relay [network] / mark-relay [network]           relay live wsAPI-signed batches there
+//
+// Every real-network command takes the network as its argument and defaults to
+// testnet. The wsAPI endpoint (SUI_WSAPI_URL) is a separate choice and must be
+// the environment whose signer that deployment registered — staging batches do
+// not verify against a mainnet registry holding the production signer.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { hexToBytes } from "@noble/hashes/utils";
 import {
   setupLocalnet,
@@ -17,7 +25,7 @@ import {
   readSviAMagnitude,
   readLastTimestamp,
   readLastBatchTimestamp,
-  useTestnetDeployer,
+  useDeployer,
   deriveIndexPxSid,
   deriveMarkPxSid,
   deriveModelParamsSid,
@@ -49,20 +57,10 @@ import {
   type SuiWireResult,
 } from "./wsapi_client.js";
 import { convertWireBatch, type ConvertedBatch } from "./wire_convert.js";
-import { setupTestnet, testnetClient, TESTNET_DEPLOYMENT, TESTNET_RPC } from "./testnet.js";
+import { deploymentUrl, resolveNetwork, type NetworkTarget, type Relayer } from "./networks.js";
 
 const DEPLOYMENT_URL = new URL("../deployment.json", import.meta.url);
 const loadDeployment = () => parseDeploymentJson(readFileSync(DEPLOYMENT_URL, "utf8"));
-
-const TESTNET_DEPLOYMENT_URL = new URL("../deployment.testnet.json", import.meta.url);
-
-/// A real publish writes deployment.testnet.json; the checked-in constant is the
-/// fallback for a deployment nobody re-published locally.
-function loadTestnetDeployment(): Deployment {
-  return existsSync(TESTNET_DEPLOYMENT_URL)
-    ? parseDeploymentJson(readFileSync(TESTNET_DEPLOYMENT_URL, "utf8"))
-    : TESTNET_DEPLOYMENT;
-}
 
 async function publish(): Promise<void> {
   const { client, keypair, address } = await setupLocalnet();
@@ -85,9 +83,12 @@ async function setSignerCmd(): Promise<void> {
   console.log("signer set on", dep.bsPackageId);
 }
 
-/// Publish all three packages to testnet from the deployer identity and register
-/// the wsAPI signer whose batches this deployment will accept.
-async function publishTestnetCmd(): Promise<void> {
+/// Publish all three packages to a real network from that network's deployer
+/// identity and register the wsAPI signer whose batches this deployment will
+/// accept. Each publish mints brand-new package ids (design.md §5 — never an
+/// in-place upgrade), so the signing domain separator changes with it and
+/// `/config/shared/sui_oracle/package_ids` has to follow for this network.
+async function publishNetworkCmd(target: NetworkTarget): Promise<void> {
   const signerHex = process.env["SUI_SIGNER_PUBKEY"];
   if (!signerHex) {
     throw new Error(
@@ -108,8 +109,9 @@ async function publishTestnetCmd(): Promise<void> {
     throw new Error(`signer pubkey must carry a compressed 0x02/0x03 prefix, got 0x${prefix?.toString(16)}`);
   }
 
-  const client = testnetClient();
-  const { keypair, address } = useTestnetDeployer();
+  const client = target.client();
+  const { keypair, address } = useDeployer(target.network);
+  console.log("network:", target.network);
   console.log("deployer address:", address);
   console.log("balance (MIST):", (await client.getBalance({ owner: address })).totalBalance);
 
@@ -119,9 +121,10 @@ async function publishTestnetCmd(): Promise<void> {
   await setSigner(client, keypair, dep, signerPubkey);
   console.log("registered signer:", signerHex);
 
-  writeFileSync(TESTNET_DEPLOYMENT_URL, JSON.stringify({ address, ...dep }, null, 2));
-  console.log("wrote deployment.testnet.json");
-  console.log("\nNEXT: point /config/shared/sui_oracle/package_ids at", dep.bsPackageId, "for this network,");
+  const file = deploymentUrl(target.network);
+  writeFileSync(file, JSON.stringify({ address, ...dep }, null, 2));
+  console.log(`wrote deployment.${target.network}.json`);
+  console.log(`\nNEXT: point /config/shared/sui_oracle/package_ids at ${dep.bsPackageId} for ${target.network},`);
   console.log("and confirm the live parameter version actually changed before relaying.");
 }
 
@@ -207,8 +210,8 @@ function firstUpdate<T>(updates: T[]): T {
 /// Relay a single wsAPI-signed batch (already converted + framed) and print the
 /// resulting PTB link. Throws if the on-chain verify/ingest call fails.
 async function relayConverted(
-  client: Awaited<ReturnType<typeof setupTestnet>>["client"],
-  keypair: Awaited<ReturnType<typeof setupTestnet>>["keypair"],
+  target: NetworkTarget,
+  { client, keypair }: Relayer,
   dep: Deployment,
   converted: ConvertedBatch,
   signature: RsvSignature,
@@ -222,7 +225,7 @@ async function relayConverted(
   const result = await relay(client, keypair, dep, message, converted.kind);
   console.log(`relay ${label}:`, result.success ? "ok" : `FAILED ${result.error}`);
   console.log("  events:", result.eventTypes);
-  console.log(`  PTB: https://testnet.suivision.xyz/txblock/${result.digest}`);
+  console.log(`  PTB: ${target.explorerTx(result.digest)}`);
   if (!result.success) {
     throw new Error(`${label} relay failed: ${result.error ?? "unknown error"}`);
   }
@@ -230,32 +233,33 @@ async function relayConverted(
 
 /// Live e2e proof: subscribe to the wsAPI as a Deepbook client for one SUI value
 /// batch (spot index) and one SUI SVI batch (21d composite BTC smile), then relay
-/// both through the real testnet bs_oracle/example_consumer deployment.
+/// both through that network's real bs_oracle/example_consumer deployment.
 ///
 /// The endpoint (`SUI_WSAPI_URL`, staging by default) must be the environment
 /// whose signer is registered in this deployment's SignerRegistry, and whose
 /// `package_ids` config resolves this network + pkg_ver to this bs_oracle. Get
 /// either wrong and verification fails on-chain after gas is spent.
-async function stagingRelayCmd(): Promise<void> {
+async function stagingRelayCmd(target: NetworkTarget): Promise<void> {
   const apiKey = process.env["SUI_API_KEY"];
   if (!apiKey) {
     throw new Error("SUI_API_KEY env var is required (a Deepbook API key for the target wsAPI)");
   }
 
-  const dep = loadTestnetDeployment();
-  console.log("testnet RPC:", TESTNET_RPC);
+  const dep = target.deployment();
+  console.log(`${target.network} RPC:`, target.rpc);
   console.log("bs_oracle package:", dep.bsPackageId);
   console.log("bs_sid package:", dep.sidPackageId);
   console.log("example_consumer package:", dep.examplePackageId);
 
   console.log("wsAPI endpoint:", WSAPI_URL);
   console.log("connecting to wsAPI, waiting for one signed value batch + one signed SVI batch...");
-  const { value, svi }: { value: SuiWireResult; svi: SuiWireResult } = await fetchSuiBatches(apiKey, "testnet");
+  const { value, svi }: { value: SuiWireResult; svi: SuiWireResult } = await fetchSuiBatches(apiKey, target.network);
   console.log("received signed value batch:", JSON.stringify(value.data));
   console.log("received signed svi batch:", JSON.stringify(svi.data));
 
-  const { client, keypair, address } = await setupTestnet();
-  console.log("relayer address (funded from the testnet faucet):", address);
+  const relayer = await target.setupRelayer();
+  const { client, address } = relayer;
+  console.log("relayer address:", address);
 
   const valueConverted = convertWireBatch(value.data);
   const sviConverted = convertWireBatch(svi.data);
@@ -300,8 +304,8 @@ async function stagingRelayCmd(): Promise<void> {
   );
 
   console.log("");
-  await relayConverted(client, keypair, dep, valueConverted, value.signature, "value");
-  await relayConverted(client, keypair, dep, sviConverted, svi.signature, "svi");
+  await relayConverted(target, relayer, dep, valueConverted, value.signature, "value");
+  await relayConverted(target, relayer, dep, sviConverted, svi.signature, "svi");
 
   console.log("readback value[sid]:", await readValue(client, dep, address, valueSid));
   console.log("readback svi a magnitude[sid]:", await readSviAMagnitude(client, dep, address, sviSid));
@@ -315,14 +319,14 @@ async function stagingRelayCmd(): Promise<void> {
 /// dropped (which would shift later fields and let two instruments collide).
 ///
 /// Both are greek-free, so each value is a single number and rides a value batch.
-async function markRelayCmd(): Promise<void> {
+async function markRelayCmd(target: NetworkTarget): Promise<void> {
   const apiKey = process.env["SUI_API_KEY"];
   if (!apiKey) {
     throw new Error("SUI_API_KEY env var is required (a Deepbook API key for the target wsAPI)");
   }
 
-  const dep = loadTestnetDeployment();
-  console.log("testnet RPC:", TESTNET_RPC);
+  const dep = target.deployment();
+  console.log(`${target.network} RPC:`, target.rpc);
   console.log("wsAPI endpoint:", WSAPI_URL);
   console.log("bs_oracle package:", dep.bsPackageId);
 
@@ -330,11 +334,12 @@ async function markRelayCmd(): Promise<void> {
   console.log(`\nsubscribing to two marks:`);
   console.log(`  perpetual  ${perpMark.exchange} ${perpMark.baseAsset} (no expiry)`);
   console.log(`  future     ${futMark.exchange} ${futMark.baseAsset} @ ${futMark.expiry}`);
-  const { perpetual, future } = await fetchMarkBatches(apiKey, "testnet");
+  const { perpetual, future } = await fetchMarkBatches(apiKey, target.network);
   console.log("received signed perpetual mark:", JSON.stringify(perpetual.data));
   console.log("received signed future mark:", JSON.stringify(future.data));
 
-  const { client, keypair, address } = await setupTestnet();
+  const relayer = await target.setupRelayer();
+  const { client, address } = relayer;
   console.log("relayer address:", address);
 
   const perpConverted = convertWireBatch(perpetual.data);
@@ -385,8 +390,8 @@ async function markRelayCmd(): Promise<void> {
   console.log("  the two marks are distinct series: OK");
 
   console.log("");
-  await relayConverted(client, keypair, dep, perpConverted, perpetual.signature, "perpetual mark");
-  await relayConverted(client, keypair, dep, futConverted, future.signature, "future mark");
+  await relayConverted(target, relayer, dep, perpConverted, perpetual.signature, "perpetual mark");
+  await relayConverted(target, relayer, dep, futConverted, future.signature, "future mark");
 
   console.log("readback perpetual mark[sid]:", await readValue(client, dep, address, perpSid));
   console.log("readback future mark[sid]:", await readValue(client, dep, address, futSid));
@@ -395,6 +400,7 @@ async function markRelayCmd(): Promise<void> {
 }
 
 const cmd = process.argv[2];
+const arg = process.argv[3];
 switch (cmd) {
   case "publish":
     await publish();
@@ -403,21 +409,24 @@ switch (cmd) {
     await setSignerCmd();
     break;
   case "relay":
-    await relayCmd(process.argv[3]);
+    await relayCmd(arg);
     break;
   case "publish-testnet":
-    await publishTestnetCmd();
+    await publishNetworkCmd(resolveNetwork("testnet"));
+    break;
+  case "publish-mainnet":
+    await publishNetworkCmd(resolveNetwork("mainnet"));
     break;
   case "staging-relay":
-    await stagingRelayCmd();
+    await stagingRelayCmd(resolveNetwork(arg));
     break;
   case "mark-relay":
-    await markRelayCmd();
+    await markRelayCmd(resolveNetwork(arg));
     break;
   default:
     console.error(
       `unknown command: ${cmd ?? "(none)"} — expected: publish | set-signer | relay [tsMs] | ` +
-        `publish-testnet | staging-relay | mark-relay`,
+        `publish-testnet | publish-mainnet | staging-relay [network] | mark-relay [network]`,
     );
     process.exitCode = 1;
 }

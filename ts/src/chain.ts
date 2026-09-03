@@ -96,22 +96,24 @@ export function exportActiveKeypair(): { keypair: Ed25519Keypair; address: strin
   return { keypair: Ed25519Keypair.fromSecretKey(bech32), address };
 }
 
-/// Point the CLI at testnet and the deployer identity, then export that key so the
-/// SDK signs with the same address the CLI publishes from. The `testnet` env must
-/// already exist in the CLI config, and must be an endpoint serving gRPC —
-/// `test-publish` needs it, and JSON-RPC-only endpoints fail with a missing
-/// grpc-status header.
-export function useTestnetDeployer(): { keypair: Ed25519Keypair; address: string } {
+/// Point the CLI at `network` and its deployer identity, then export that key so
+/// the SDK signs with the same address the CLI publishes from. The env must
+/// already exist in the CLI config under the network's own name — `publish`
+/// writes `Published.toml` under the *active env name*, so an env aliased
+/// anything else would record the deployment under the wrong environment — and
+/// must be an endpoint serving gRPC, since JSON-RPC-only endpoints fail with a
+/// missing grpc-status header.
+export function useDeployer(network: Network): { keypair: Ed25519Keypair; address: string } {
   try {
-    sui(["client", "switch", "--env", "testnet"]);
+    sui(["client", "switch", "--env", network]);
   } catch (err) {
     throw new Error(
-      "no `testnet` env in the sui CLI config — add one pointing at a gRPC-capable fullnode " +
-        "(`sui client new-env --alias testnet --rpc <url>`)",
+      `no \`${network}\` env in the sui CLI config — add one pointing at a gRPC-capable fullnode ` +
+        `(\`sui client new-env --alias ${network} --rpc <url>\`)`,
       { cause: err },
     );
   }
-  sui(["client", "switch", "--address", TESTNET_DEPLOYER_ALIAS]);
+  sui(["client", "switch", "--address", deployerAlias(network)]);
   return exportActiveKeypair();
 }
 
@@ -136,6 +138,11 @@ export async function setupLocalnet(): Promise<{ client: SuiClient; keypair: Ed2
 }
 
 // === Publishing + signer ===
+
+/// The real Sui networks this repo publishes to and relays against. Localnet is
+/// deliberately not one of them: it has no stable chain id, no `Published.toml`,
+/// and its own bootstrap path.
+export type Network = "testnet" | "mainnet";
 
 // `bsPackageId` doubles as the moveCall target and the address `signedBytesFor`
 // prepends before hashing — these only stay identical because each version is
@@ -165,8 +172,15 @@ const BS_PKG_PATH = resolve(here, "../../move/bs_oracle");
 const EXAMPLE_PKG_PATH = resolve(here, "../../move/example_consumer");
 const SID_PKG_PATH = resolve(here, "../../move/bs_sid");
 
-/// sui keystore alias that owns the testnet packages and their AdminCap.
-const TESTNET_DEPLOYER_ALIAS = process.env["SUI_DEPLOYER_ALIAS"] ?? "testnet-deployer";
+/// sui keystore alias that owns a network's packages and their AdminCap. Two
+/// separate keys on purpose: a testnet key funded from a faucet must never be
+/// able to publish or hold admin rights over the mainnet deployment.
+const DEPLOYER_ALIAS: Record<Network, string> = {
+  testnet: "testnet-deployer",
+  mainnet: "mainnet-deployer",
+};
+
+const deployerAlias = (network: Network): string => process.env["SUI_DEPLOYER_ALIAS"] ?? DEPLOYER_ALIAS[network];
 
 function requiredString(record: Record<string, unknown>, field: string): string {
   const value = record[field];
