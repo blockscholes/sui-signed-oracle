@@ -114,10 +114,11 @@ sui-signed-oracle/
 │       ├── signer.ts                      # secp256k1 keys + recoverable sign; {r,s,v}; frameMessage packs the 65-byte wire
 │       ├── payloads.ts                    # BCS schema + payload builder + fixed-point / signed SVI encoding + hex utils
 │       ├── chain.ts                       # localnet plumbing + publish/set-signer + verify->consumer PTB relay + devInspect reads
-│       ├── cli.ts                         # CLI entry: publish | set-signer | relay | staging-relay subcommands
+│       ├── cli.ts                         # CLI entry: publish | set-signer | relay | publish-{testnet,mainnet} | staging-relay | mark-relay
 │       ├── wsapi_client.ts                 # staging wsAPI client (JSON-RPC over websocket) for the signed-batch stream
 │       ├── wire_convert.ts                 # wsAPI batch JSON -> the BCS input shapes payloads.ts re-encodes
-│       ├── testnet.ts                      # pinned testnet deployment ids + faucet setup
+│       ├── testnet.ts                      # testnet RPC + faucet-funded relayer setup
+│       ├── networks.ts                      # per-network wiring: RPC, published ids, relayer key, explorer links
 │       └── signer.test.ts / e2e.test.ts   # vitest (unit + localnet e2e)
 └── reference/deepbookv3/                  # READ-ONLY clone of MystenLabs/deepbookv3 @ main (not built)
 ```
@@ -250,7 +251,56 @@ equivalent) — so live signing + a real transaction is the natural place to pro
 
 ---
 
-## 6. Mapping to production / real Block Scholes feeds
+## 6. Published deployments
+
+Every version is published as a **brand-new package** — never an in-place upgrade — because
+`verify.move`'s domain separator _is_ the package id (§5 of `docs/design.md`). So each row below is
+a distinct verifier, and a batch signed for one does not verify against another. `bs_oracle`'s
+`UpgradeCap` is burned at publish time, which makes that guarantee structural rather than a policy
+anyone has to remember.
+
+|                    | mainnet (`35834a8a`)                                                 | testnet (`4c78adac`)                                                 |
+| ------------------ | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `bs_oracle`        | `0xa408bcdeb8e7607b1cbb92c088147d61664a6255a3ea5696a8fef44711e113d8` | `0x9d2cf38611d971a0e918b93fc0113d279f5c923f43e62c407a9ad0f9d82f6698` |
+| `bs_sid`           | `0xdacaf624c4802c9ff7b8c72447207f5078b78be246f78e143d63e6cd89b4f63d` | `0x6a54299d593fca24edf6b17bf8c3aff0b7ba8bc8f4276e9c1065689c50223bba` |
+| `example_consumer` | `0x27382a2058063f29c6adcf32d2489b9b8ce64202b6b2f7606335974764a84316` | `0x54e04f7e68c17e8798996186a0bbdd81bc6ad4dd512d79ee91b0f458a3df24c3` |
+| `SignerRegistry`   | `0xc578b6058b0ba9cf2254962168cd779593805c4f10f80aef8749df75ef7fc0e5` | `0x94d0198a6fa973bb457603ed39b39b76c98468114808ad5b518745b7b957c414` |
+| `ExampleOracle`    | `0xf10649932629bf99c3107d1b5c1f9be818e03445079d1d2fd7244f76dc0fa7ee` | `0x28267662344c00763d76b4aae1e854086bf8893b9f8ba014b991d833ebbf8362` |
+| registered signer  | production                                                           | production                                                           |
+
+The canonical record is each package's `Published.toml` (written by `sui client publish`) plus
+`ts/deployment.<network>.json`; the tables above and `ts/src/networks.ts` restate them for readers
+and for the relay commands' fallback.
+
+```bash
+cd ts
+# Publish all three packages and register the signer whose batches this deployment accepts.
+# SUI_SIGNER_PUBKEY is the wsAPI signer's 33-byte compressed secp256k1 key — recover it from
+# several independent live-signed batches, never from a KMS alias.
+SUI_SIGNER_PUBKEY=0x02... pnpm publish-mainnet    # or pnpm publish-testnet
+
+# Relay live wsAPI-signed batches through a published deployment. The network argument and
+# SUI_WSAPI_URL must agree: only the environment whose signer that registry holds will verify.
+SUI_API_KEY=... pnpm staging-relay mainnet
+SUI_API_KEY=... pnpm mark-relay mainnet
+```
+
+Each network needs a `sui` CLI env under **its own name** (`sui client new-env --alias mainnet
+--rpc <gRPC fullnode>`), since `sui client publish` records `Published.toml` under the active env
+name, and a keystore alias to publish from (`mainnet-deployer` / `testnet-deployer`, overridable
+with `SUI_DEPLOYER_ALIAS`). The CLI speaks gRPC while this SDK speaks JSON-RPC, and
+`fullnode.mainnet.sui.io` has retired the latter — so `SUI_MAINNET_RPC` points at a JSON-RPC
+endpoint separately. Mainnet has no faucet: `SUI_MAINNET_PRIVKEY` must name an already-funded
+relayer key.
+
+**After any publish**, point `/config/shared/sui_oracle/package_ids` at the new `bs_oracle` id for
+that network and confirm the live parameter version actually changed — the id is the signing
+domain separator, so a stale one fails every relay with `EBadSigner` long after the publish looked
+successful.
+
+---
+
+## 7. Mapping to production / real Block Scholes feeds
 
 This reference signs ad‑hoc payloads from a TS script. To productionise:
 

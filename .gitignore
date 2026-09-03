@@ -20,7 +20,8 @@ dist/
 *.local.md
 
 # transient localnet deployment ids (fresh chain id every regenesis).
-# deployment.testnet.json is NOT ignored: it records a real deployment.
+# deployment.testnet.json / deployment.mainnet.json are NOT ignored: they record
+# real deployments.
 deployment.json
 
 # Ephemeral addressing file `sui client test-publish --pubfile-path <name>` writes for
