@@ -276,6 +276,13 @@ sid      = keccak256(preimage), read big-endian into u256
   positional, so dropping one would shift every later field. **Timestamp precision is signed identity**:
   a surface at two precisions is two different series, since the payload's `u64` timestamps mean nothing
   without their unit.
+- **Sid version 2** (`mark_px_v2`/`mark_px_v2_generic`, `index_px_v2`/`index_px_v2_generic`) builds
+  the body by hand instead of from a descriptor struct: an absent optional field writes nothing, and a
+  present one writes its slot number (one byte) then its BCS value. Required fields and the closing
+  `decimals`/`timestamp_precision` keep their version 1 bytes, and `index.px`'s required `index_spread`
+  (slot 6) stays between the optional slots 5 and 7. Every version 2 field is a typed parameter. A
+  version 1 sid never moves, and `model.params`/`settlement.px` have no optional fields, so they derive
+  the same sid in both versions.
 
 Byte-annotated example (`model.params`, SVI, HYPE, composite, an absolute expiry, testnet,
 unpublished placeholder package id):

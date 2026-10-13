@@ -11,8 +11,10 @@
 /// scope, so the public functions reproduce the pinned literals directly.
 ///
 /// Generator: `ts/src/generate_sid_vectors.ts` (`pnpm -C ts generate-vectors`),
-/// output `../vectors.json`. Every constant below is copied from it; the
-/// `preimage` field is the byte-level diff aid when a literal fails.
+/// output `../vectors.json`. Every version 1 constant below is copied from it;
+/// the `preimage` field is the byte-level diff aid when a literal fails. The
+/// version 2 constants come from the off-chain reference derivation until the
+/// generator mirrors version 2.
 #[test_only]
 module bs_sid::sid_tests {
     use bs_sid::sid;
@@ -57,6 +59,15 @@ module bs_sid::sid_tests {
     const MODEL_PARAMS_SECOND_PRECISION: u256 = 0x68c29e470e07e248ed8f7a9f82f8000ab6af07e70796d5a45c0d0b8616b2b6b9;
     const SETTLEMENT_PX: u256 = 0x50a21cf32bf590f21cf5c6f14772300699e528ea6c719ec1cad1ab59fe75dbf5;
     const SETTLEMENT_PX_ASSET_OVERRIDE: u256 = 0x4ac7b1f8667200d49fd41f5301ae23aeebad63c5bed712cfa863f52457c57bfe;
+
+    // Expected sid version 2 ids, from the off-chain reference derivation at
+    // `sid_version=2`; vectors.json carries version 1 only.
+    const MARK_PX_V2_FUTURE: u256 = 0x1992837eb7eccd0906d1335046cac15129a3320ea2703cb29092b4d76413e634;
+    const MARK_PX_V2_PERPETUAL: u256 = 0x25f9a083966dea895eca8908e281cb59b080fb7d61fe9299ccb8ca70adfd2388;
+    const MARK_PX_V2_OPTION: u256 = 0xc0ad48b3eb2552bd146a05aad4c471c27203a4c41bbbb963ffd9c2879befe354;
+    const INDEX_PX_V2_BASIC: u256 = 0x8d1fe6799140e53b43e2fb1d359fc7bfb2e6ac75778bcdd823258a6b98590300;
+    const INDEX_PX_V2_FULL: u256 = 0xb63110e90f5033ccd0ca0a9070cd916c6631f40838c300509df3d7b97e1a1e67;
+    const MARK_PX_V2_MONEYNESS: u256 = 0x8cd570099d5ed7dabe78b8b1602e2c22256afd5a894c3b4c1dbfdb5e78a301c6;
 
     // === index.px ===
 
@@ -511,5 +522,145 @@ module bs_sid::sid_tests {
             b"ms".to_string(),
         );
         assert!(other_deployment != MODEL_PARAMS_SVI);
+    }
+
+    // === Sid version 2 ===
+
+    fun mark_px_v2_future(): u256 {
+        sid::mark_px_v2(
+            ORACLE_PACKAGE_ID,
+            b"future".to_string(),
+            b"deribit".to_string(),
+            b"BTC".to_string(),
+            option::some(sid::expiry_at(EXPIRY_MS)),
+            DECIMALS,
+            b"ms".to_string(),
+        )
+    }
+
+    #[test]
+    fun mark_px_v2_future_matches_the_reference() {
+        assert_eq!(mark_px_v2_future(), MARK_PX_V2_FUTURE);
+    }
+
+    #[test]
+    fun mark_px_v2_perpetual_matches_the_reference() {
+        let sid = sid::mark_px_v2(
+            ORACLE_PACKAGE_ID,
+            b"perpetual".to_string(),
+            b"deribit".to_string(),
+            b"BTC".to_string(),
+            option::none(),
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert_eq!(sid, MARK_PX_V2_PERPETUAL);
+    }
+
+    #[test]
+    fun mark_px_v2_defaults_equal_explicit_spelling() {
+        let explicit = sid::mark_px_v2_generic(
+            ORACLE_PACKAGE_ID,
+            b"future".to_string(),
+            b"deribit".to_string(),
+            b"BTC".to_string(),
+            b"USD".to_string(),
+            option::some(sid::expiry_at(EXPIRY_MS)),
+            option::none(),
+            option::none(),
+            option::none(),
+            option::none(),
+            option::none(),
+            option::none(),
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert_eq!(explicit, MARK_PX_V2_FUTURE);
+    }
+
+    #[test]
+    fun mark_px_v2_option_matches_the_reference() {
+        let sid = sid::mark_px_v2_generic(
+            ORACLE_PACKAGE_ID,
+            b"option".to_string(),
+            b"deribit".to_string(),
+            b"BTC".to_string(),
+            b"USD".to_string(),
+            option::some(sid::expiry_at(EXPIRY_MS)),
+            option::some(vector[sid::mark_strike(0, STRIKE_42_50, b"".to_string())]),
+            option::some(b"SVI".to_string()),
+            option::none(),
+            option::some(b"C".to_string()),
+            option::some(vector[b"delta".to_string()]),
+            option::some(b"american".to_string()),
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert_eq!(sid, MARK_PX_V2_OPTION);
+    }
+
+    #[test]
+    fun mark_px_v2_moneyness_matches_the_reference() {
+        let sid = sid::mark_px_v2_generic(
+            ORACLE_PACKAGE_ID,
+            b"option".to_string(),
+            b"deribit".to_string(),
+            b"BTC".to_string(),
+            b"USD".to_string(),
+            option::some(sid::expiry_at(EXPIRY_MS)),
+            option::none(),
+            option::none(),
+            option::some(vector[250_000_000]),
+            option::some(b"C".to_string()),
+            option::none(),
+            option::none(),
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert_eq!(sid, MARK_PX_V2_MONEYNESS);
+    }
+
+    #[test]
+    fun index_px_v2_matches_the_reference() {
+        let sid = sid::index_px_v2(
+            ORACLE_PACKAGE_ID,
+            b"spot".to_string(),
+            b"HYPE".to_string(),
+            option::none(),
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert_eq!(sid, INDEX_PX_V2_BASIC);
+    }
+
+    #[test]
+    fun index_px_v2_writes_the_spread_between_slots_5_and_7() {
+        let sid = sid::index_px_v2_generic(
+            ORACLE_PACKAGE_ID,
+            b"future".to_string(),
+            b"composite".to_string(),
+            b"BTC".to_string(),
+            b"USD".to_string(),
+            option::some(b"reference".to_string()),
+            true,
+            option::some(sid::expiry_tenor(TENOR_30D_MS)),
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert_eq!(sid, INDEX_PX_V2_FULL);
+    }
+
+    #[test]
+    fun a_v2_future_is_a_different_series_from_v1() {
+        let v1 = sid::mark_px(
+            ORACLE_PACKAGE_ID,
+            b"future".to_string(),
+            b"deribit".to_string(),
+            b"BTC".to_string(),
+            option::some(sid::expiry_at(EXPIRY_MS)),
+            DECIMALS,
+            b"ms".to_string(),
+        );
+        assert!(v1 != mark_px_v2_future());
     }
 }

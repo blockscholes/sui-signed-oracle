@@ -37,6 +37,13 @@
 /// carried AS SENT — two spellings reach two different upstream feeds. An
 /// absent `Option` still emits its tag byte: BCS is positional, so omission
 /// would shift later fields and let two instruments encode identically.
+///
+/// Sid version 2 (`mark_px_v2*`, `index_px_v2*`) instead writes nothing for an
+/// absent optional field and prefixes a present one with its slot number, so
+/// the bytes stay unambiguous and an option-only field never reaches a future's
+/// sid. Required fields and the closing `decimals | timestamp_precision` keep
+/// their version 1 bytes, and every other kind derives the same sid in both
+/// versions.
 module bs_sid::sid {
     use std::string::String;
     use sui::{bcs, hash};
@@ -63,6 +70,18 @@ module bs_sid::sid {
 
     const EXPIRY_ABSOLUTE: u8 = 0;
     const EXPIRY_TENOR: u8 = 1;
+
+    /// Sid version 2 slot numbers of the optional fields. A `_v2` body writes
+    /// a present field as its slot number then its value, and an absent one as nothing.
+    const MARK_SLOT_EXPIRY: u8 = 5;
+    const MARK_SLOT_STRIKE: u8 = 6;
+    const MARK_SLOT_MODEL: u8 = 7;
+    const MARK_SLOT_MONEYNESS: u8 = 8;
+    const MARK_SLOT_OPTION_TYPE: u8 = 9;
+    const MARK_SLOT_GREEKS: u8 = 10;
+    const MARK_SLOT_EXERCISE_STYLE: u8 = 11;
+    const INDEX_SLOT_TYPE: u8 = 5;
+    const INDEX_SLOT_EXPIRY: u8 = 7;
 
     /// A strike whose fields contradict its tag: it would encode bytes the
     /// wsAPI never produces, and derive an id nothing is stored under.
@@ -413,7 +432,132 @@ module bs_sid::sid {
         )
     }
 
+    // === Derivation, sid version 2 ===
+
+    /// Every v2 `mark.px` identity field spelled out. An absent optional field
+    /// adds nothing to the body, so a future's sid carries no option bytes.
+    public fun mark_px_v2_generic(
+        package_id: address,
+        asset: String,
+        exchange: String,
+        base_asset: String,
+        quote_asset: String,
+        expiry: Option<Expiry>,
+        strike: Option<vector<MarkStrike>>,
+        model: Option<String>,
+        moneyness: Option<vector<u128>>,
+        option_type: Option<String>,
+        greeks: Option<vector<String>>,
+        exercise_style: Option<String>,
+        decimals: u8,
+        timestamp_precision: String,
+    ): u256 {
+        let mut body = bcs::to_bytes(&asset);
+        body.append(bcs::to_bytes(&exchange));
+        body.append(bcs::to_bytes(&base_asset));
+        body.append(bcs::to_bytes(&quote_asset));
+        push_tagged(&mut body, MARK_SLOT_EXPIRY, &expiry);
+        push_tagged(&mut body, MARK_SLOT_STRIKE, &strike);
+        push_tagged(&mut body, MARK_SLOT_MODEL, &model);
+        push_tagged(&mut body, MARK_SLOT_MONEYNESS, &moneyness);
+        push_tagged(&mut body, MARK_SLOT_OPTION_TYPE, &option_type);
+        push_tagged(&mut body, MARK_SLOT_GREEKS, &greeks);
+        push_tagged(&mut body, MARK_SLOT_EXERCISE_STYLE, &exercise_style);
+        push_tail(&mut body, decimals, timestamp_precision);
+        digest(package_id, FEED_MARK_PX, body)
+    }
+
+    /// A scalar v2 mark (perpetual or future): USD quote, every instrument
+    /// field absent.
+    public fun mark_px_v2(
+        package_id: address,
+        asset: String,
+        exchange: String,
+        base_asset: String,
+        expiry: Option<Expiry>,
+        decimals: u8,
+        timestamp_precision: String,
+    ): u256 {
+        mark_px_v2_generic(
+            package_id,
+            asset,
+            exchange,
+            base_asset,
+            DEFAULT_QUOTE_ASSET.to_string(),
+            expiry,
+            option::none(),
+            option::none(),
+            option::none(),
+            option::none(),
+            option::none(),
+            option::none(),
+            decimals,
+            timestamp_precision,
+        )
+    }
+
+    /// Every v2 `index.px` identity field spelled out. `index_spread` is the
+    /// required slot 6, so it sits between the optional slots 5 and 7.
+    public fun index_px_v2_generic(
+        package_id: address,
+        asset: String,
+        exchange: String,
+        base_asset: String,
+        quote_asset: String,
+        index_type: Option<String>,
+        index_spread: bool,
+        expiry: Option<Expiry>,
+        decimals: u8,
+        timestamp_precision: String,
+    ): u256 {
+        let mut body = bcs::to_bytes(&asset);
+        body.append(bcs::to_bytes(&exchange));
+        body.append(bcs::to_bytes(&base_asset));
+        body.append(bcs::to_bytes(&quote_asset));
+        push_tagged(&mut body, INDEX_SLOT_TYPE, &index_type);
+        body.append(bcs::to_bytes(&index_spread));
+        push_tagged(&mut body, INDEX_SLOT_EXPIRY, &expiry);
+        push_tail(&mut body, decimals, timestamp_precision);
+        digest(package_id, FEED_INDEX_PX, body)
+    }
+
+    /// The common v2 index: blockscholes exchange, USD quote, no index type,
+    /// no spread.
+    public fun index_px_v2(
+        package_id: address,
+        asset: String,
+        base_asset: String,
+        expiry: Option<Expiry>,
+        decimals: u8,
+        timestamp_precision: String,
+    ): u256 {
+        index_px_v2_generic(
+            package_id,
+            asset,
+            DEFAULT_INDEX_EXCHANGE.to_string(),
+            base_asset,
+            DEFAULT_QUOTE_ASSET.to_string(),
+            option::none(),
+            false,
+            expiry,
+            decimals,
+            timestamp_precision,
+        )
+    }
+
     // === Private ===
+
+    fun push_tagged<T>(body: &mut vector<u8>, slot: u8, value: &Option<T>) {
+        if (value.is_some()) {
+            body.push_back(slot);
+            body.append(bcs::to_bytes(value.borrow()));
+        }
+    }
+
+    fun push_tail(body: &mut vector<u8>, decimals: u8, timestamp_precision: String) {
+        body.append(bcs::to_bytes(&decimals));
+        body.append(bcs::to_bytes(&timestamp_precision));
+    }
 
     fun digest(package_id: address, feed: vector<u8>, body: vector<u8>): u256 {
         // No network: distinct chains already carry distinct package ids.
