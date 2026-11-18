@@ -32,3 +32,12 @@ move/*/Pub.*.toml
 
 # read-only reference clone (do not vendor)
 reference/
+
+# Native evaluation artifacts and Python harness cache
+.evaluator-artifacts/
+.pytest_cache/
+__pycache__/
+.coverage
+.evaluator-localnet.json
+move/*/.coverage_map.mvcov
+move/*/traces/

@@ -1,0 +1,3 @@
+[run]
+# This project contains only a Python adapter, not Python production code.
+omit = *
