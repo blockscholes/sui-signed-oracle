@@ -1,0 +1,2 @@
+# Test harness only; native Move uses the CI-pinned Sui CLI.
+pytest>=8,<9
